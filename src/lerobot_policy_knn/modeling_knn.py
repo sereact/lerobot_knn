@@ -573,8 +573,16 @@ class KNNPolicy(PreTrainedPolicy):
         index["calib"] = calib
         return calib
 
-    def aggregate(self, rows: Tensor, weights: Tensor) -> Tensor:
+    def aggregate(self, rows: Tensor, weights: Tensor, query_state: Tensor | None = None) -> Tensor:
         chunks = self.gather_chunks(rows)
+        dims = self.config.relative_action_dims
+        if dims:
+            if query_state is None:
+                raise ValueError("relative_action_dims needs the query's observation.state")
+            # every neighbour's motion relative to its own state at the retrieved frame
+            anchor = self.key_state[rows].float() * self.state_std + self.state_mean
+            chunks = chunks.clone()
+            chunks[..., dims] -= anchor[..., dims][:, :, None, :]
         if self.config.action_mode_bandwidth > 0:
             # only average neighbours whose (motion) chunks agree with the dominant one
             motion = chunks[..., : self.config.gripper_index % chunks.shape[-1]].flatten(2)
@@ -590,6 +598,9 @@ class KNNPolicy(PreTrainedPolicy):
         if self.config.gripper_mode == "sign":
             g = self.config.gripper_index
             out[..., g] = torch.where(out[..., g] >= 0, 1.0, -1.0)
+        if dims:
+            assert query_state is not None
+            out[..., dims] += query_state.float()[:, None, dims]
         return out
 
     # ------------------------------------------------------------------ policy API
@@ -653,7 +664,8 @@ class KNNPolicy(PreTrainedPolicy):
             matches = torch.stack([self.key_episode[top], self.key_frame[top]], 1).tolist()
             for slot, (ep, fr) in zip(slots, matches, strict=True):
                 slot.last_match = (ep, fr, slot.t)
-        return self.aggregate(rows, weights)
+        query_state = batch[OBS_STATE].to(self.device) if self.config.relative_action_dims else None
+        return self.aggregate(rows, weights, query_state)
 
     @staticmethod
     def _batch_size(batch: dict[str, Any]) -> int:

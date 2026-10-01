@@ -99,6 +99,11 @@ class KNNConfig(PreTrainedConfig):
     # "sign": binarise the averaged gripper command; "mean": keep the weighted average.
     gripper_mode: str = "sign"
     gripper_index: int = -1
+    # Action dims retrieved relative to the state (LeRobot's relative actions): every neighbour's chunk is re-anchored
+    # on the query, chunk - state(neighbour key frame) + state(query), on the same state indices. For absolute
+    # end-effector targets (e.g. derroboter's xyz + rot6d per arm, grippers left absolute): a neighbour recorded
+    # elsewhere in the workspace then contributes its motion instead of its position. Empty: absolute actions.
+    relative_action_dims: list[int] = field(default_factory=list)
 
     # ---- Retry / backtracking ----
     # When the observation looks unlike any demonstration (top-1 distance above this many times the task's
@@ -150,6 +155,8 @@ class KNNConfig(PreTrainedConfig):
             raise ValueError(f"Unknown gripper_mode '{self.gripper_mode}'")
         if self.k < 1:
             raise ValueError("k must be >= 1")
+        if self.relative_action_dims and self.state_axis_angle_start is not None:
+            raise ValueError("relative_action_dims index the raw state: set state_axis_angle_start=None")
 
     @property
     def active_cameras(self) -> list[str]:
