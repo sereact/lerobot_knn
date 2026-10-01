@@ -1,0 +1,21 @@
+{
+ "image_encoder": "vla:smolvla_libero",
+ "image_pooling": "grid2",
+ "camera_weights": {
+  "observation.images.image": 1.0,
+  "observation.images.image2": 1.0
+ },
+ "state_weight": 0.0,
+ "time_weight": 0.0,
+ "task_conditioning": "filter",
+ "k": 8,
+ "temperature": 0.1,
+ "one_per_episode": true,
+ "history_weight": 0.0,
+ "action_mode_bandwidth": 0.0,
+ "chunk_size": 10,
+ "n_action_steps": 10,
+ "temporal_ensemble_coeff": null,
+ "memory_stride": 2,
+ "gripper_mode": "sign"
+}

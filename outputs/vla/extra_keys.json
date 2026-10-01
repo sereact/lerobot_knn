@@ -1,0 +1,64 @@
+{
+ "keys": [
+  {
+   "name": "xvla_base",
+   "label": "X-VLA base grid2@L8",
+   "encoder": "vla:xvla_base",
+   "pooling": "grid2@L8",
+   "norm": "zscore",
+   "stem": "plain_xvla_base_grid2@L8_z",
+   "tap": "L8",
+   "fair": true
+  },
+  {
+   "name": "xvla_libero",
+   "label": "X-VLA LIBERO grid2@L8",
+   "encoder": "vla:xvla_libero",
+   "pooling": "grid2@L8",
+   "norm": "zscore",
+   "stem": "plain_xvla_libero_grid2@L8_z",
+   "tap": "L8",
+   "fair": false
+  },
+  {
+   "name": "pi0fast_base",
+   "label": "\u03c00-FAST base grid2@L12",
+   "encoder": "vla:pi0fast_base",
+   "pooling": "grid2@L12",
+   "norm": "zscore",
+   "stem": "plain_pi0fast_base_grid2@L12_z",
+   "tap": "L12",
+   "fair": true
+  },
+  {
+   "name": "pi0fast_libero",
+   "label": "\u03c00-FAST LIBERO grid2@L12",
+   "encoder": "vla:pi0fast_libero",
+   "pooling": "grid2@L12",
+   "norm": "zscore",
+   "stem": "plain_pi0fast_libero_grid2@L12_z",
+   "tap": "L12",
+   "fair": false
+  },
+  {
+   "name": "vla_jepa_pretrain",
+   "label": "VLA-JEPA base grid2@L7",
+   "encoder": "vla:vla_jepa_pretrain",
+   "pooling": "grid2@L7",
+   "norm": "zscore",
+   "stem": "plain_vla_jepa_pretrain_grid2@L7_z",
+   "tap": "L7",
+   "fair": true
+  },
+  {
+   "name": "vla_jepa_libero",
+   "label": "VLA-JEPA LIBERO grid2@L7",
+   "encoder": "vla:vla_jepa_libero",
+   "pooling": "grid2@L7",
+   "norm": "zscore",
+   "stem": "plain_vla_jepa_libero_grid2@L7_z",
+   "tap": "L7",
+   "fair": false
+  }
+ ]
+}

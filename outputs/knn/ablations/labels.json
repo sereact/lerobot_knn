@@ -1,0 +1,18 @@
+{
+ "outputs/knn/ablations/00_base.json": "final configuration",
+ "outputs/knn/ablations/demos_10.json": "10% of the demonstrations (4\u20135 per task)",
+ "outputs/knn/ablations/demos_25.json": "25% of the demonstrations",
+ "outputs/knn/ablations/demos_50.json": "50% of the demonstrations",
+ "outputs/knn/ablations/encoder_dinov2.json": "encoder: DINOv2-S CLS",
+ "outputs/knn/ablations/encoder_pixels.json": "encoder: raw 16\u00d716 pixels",
+ "outputs/knn/ablations/hard_filter.json": "hard task filter instead of soft prompt distance",
+ "outputs/knn/ablations/k1.json": "k = 1: replay the single nearest demo, no averaging",
+ "outputs/knn/ablations/no_agentview.json": "wrist camera only",
+ "outputs/knn/ablations/no_ensemble.json": "open-loop chunks (execute 8 of 8), no temporal ensembling",
+ "outputs/knn/ablations/no_history.json": "no history matching",
+ "outputs/knn/ablations/no_language.json": "no task conditioning (prompt ignored)",
+ "outputs/knn/ablations/no_mode.json": "plain weighted mean (no mode-seeking)",
+ "outputs/knn/ablations/no_state.json": "images only (state weight 0)",
+ "outputs/knn/ablations/no_time.json": "no time feature",
+ "outputs/knn/ablations/no_wrist.json": "agent-view camera only"
+}
