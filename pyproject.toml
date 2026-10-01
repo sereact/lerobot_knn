@@ -1,0 +1,86 @@
+[project]
+name = "lerobot_policy_knn"
+version = "0.1.0"
+description = "Non-parametric k-nearest-neighbour action-chunk retrieval policy for LeRobot"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "lerobot[dataset]",
+    "transformers>=5.4.0,<6.0.0",
+]
+
+[project.optional-dependencies]
+# Everything needed to reproduce the LIBERO study: simulator, hyper-parameter search, dashboards.
+experiments = [
+    "lerobot[libero]",
+    "optuna>=4.5.0,<5.0.0",
+    "optuna-dashboard>=0.19.0,<1.0.0",
+    "plotly>=6.0.0,<7.0.0",
+    "kaleido>=1.0.0,<2.0.0",
+    "scikit-learn>=1.5.0,<2.0.0",
+]
+# VLA backbones as retrieval embedders ("Your VLA is secretly kNN"): the core study set, SmolVLA, pi0 / pi0-FAST /
+# pi0.5 and X-VLA.
+vla = [
+    "lerobot[smolvla]",
+    "lerobot[pi]",
+    "lerobot[xvla]",
+    "lerobot[training]",
+    "matplotlib>=3.10.3,<4.0.0",
+]
+# Further VLA families, each through LeRobot's own extra (multi_task_dit: the diffusion-transformer baseline).
+vla_jepa = ["lerobot[vla_jepa]"]
+groot = ["lerobot[groot]"]
+molmoact2 = ["lerobot[molmoact2]"]
+evo1 = ["lerobot[evo1]"]
+multi_task_dit = ["lerobot[multi_task_dit]"]
+# The whole study in one environment: uv sync --extra all
+all = ["lerobot_policy_knn[experiments,vla,vla_jepa,groot,molmoact2,evo1,multi_task_dit]"]
+
+[dependency-groups]
+dev = ["pytest>=8.1.0,<10.0.0", "ruff>=0.14.1"]
+
+[project.scripts]
+lerobot-knn-fit = "lerobot_policy_knn.fit:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/lerobot_policy_knn"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[tool.uv.sources]
+# LeRobot at the commit the study ran on. It is newer than the 0.6.1 release (GR00T N1.7, MolmoAct2, Evo-1,
+# VLA-JEPA and the checkpoint processor loading the VLA code relies on); move to a release once one includes them.
+lerobot = { git = "https://github.com/huggingface/lerobot", rev = "e595b7902714ba51f91e47523f66f89c5181b649" }
+torch = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform == 'linux'" }]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+extend-exclude = ["outputs"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "T20", "N", "UP", "SIM"]
+ignore = [
+    "E501", # Line too long
+    "T201", # Print statement found
+    "T203", # Pprint statement found
+    "B008", # Perform function call in argument defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401", "F403", "E402"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+known-first-party = ["lerobot_policy_knn"]
+known-third-party = ["lerobot"]

@@ -1,0 +1,265 @@
+% "Your VLA is Secretly kNN" -- A1 portrait workshop poster, three sections (left / middle / right).
+% Build: `make` in this directory (collects results, renders figures + numbers.tex, runs lualatex).
+\documentclass{article}
+\usepackage[paperwidth=594mm,paperheight=841mm,margin=0mm]{geometry}
+\usepackage{fontspec}
+\usepackage{unicode-math}
+\setmainfont{Inter}[Numbers=Proportional]
+\newfontfamily\display{Inter Display}
+\setmathfont{FiraMath-Regular.otf}
+\usepackage{xcolor,graphicx,booktabs,tabularx,array,enumitem}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,decorations.markings,calc,positioning,shapes.geometric}
+\usepackage[poster,skins,fitting]{tcolorbox}
+
+% ---- colour roles (validated with the dataviz palette checker) -------------------------------------------
+\definecolor{page}{HTML}{EDEFF2}
+\definecolor{panel}{HTML}{FFFFFF}
+\definecolor{ink}{HTML}{0B0B0B}
+\definecolor{ink2}{HTML}{4A4946}
+\definecolor{muted}{HTML}{898781}
+\definecolor{hair}{HTML}{DCDEE2}
+\definecolor{tint}{HTML}{F5F6F8}
+\definecolor{titlebg}{HTML}{121821}
+\definecolor{knn}{HTML}{EB6834}      % kNN / retrieval (ours)
+\definecolor{learned}{HTML}{2A78D6}  % learned models (DiT, VLA)
+\definecolor{human}{HTML}{9A988F}    % human demonstrations, generic encoders
+\definecolor{ladderA}{HTML}{86B6EF}  % generic VLM
+\definecolor{ladderB}{HTML}{2A78D6}  % robot-pretrained VLA
+\definecolor{ladderC}{HTML}{104281}  % LIBERO fine-tuned VLA
+
+\newcommand{\pending}{\textcolor{knn}{\bfseries running}}
+\input{numbers.tex}
+
+% ---- building blocks -------------------------------------------------------------------------------------
+\newcommand{\hl}[1]{\textcolor{knn}{\bfseries #1}}
+\newcommand{\knnword}{\textcolor{knn}{\bfseries kNN}}
+\newcommand{\sectionhead}[2]{%
+  {\display\bfseries\fontsize{29}{33}\selectfont
+   \tikz[baseline=(c.base)]\node[circle,fill=knn,text=white,inner sep=0pt,minimum size=1.2em,
+     font=\display\bfseries\fontsize{24}{24}\selectfont](c){#1};\hspace{4mm}#2\par}
+  \vspace{2.5mm}{\color{ink}\rule{\linewidth}{0.7mm}}\par\vspace{1mm}}
+\newcommand{\block}[1]{\par\vspace{5.5mm}%
+  {\display\bfseries\fontsize{20}{24}\selectfont\color{ink}#1\par}\vspace{2.2mm}}
+\newcommand{\fig}[1]{\par\vspace{1.5mm}\noindent\includegraphics[width=\linewidth]{figures/#1}\par\vspace{1.5mm}}
+\newcommand{\note}[1]{{\fontsize{12.5}{16}\selectfont\color{ink2}#1\par}}
+\newcommand{\stat}[2]{%
+  \begin{minipage}[t]{0.235\linewidth}
+    {\display\bfseries\fontsize{38}{42}\selectfont\color{knn}#1\par}\vspace{1mm}
+    {\fontsize{14.5}{18.5}\selectfont\color{white!82!titlebg}#2\par}
+  \end{minipage}}
+\newcommand{\statsep}{\hfill{\color{white!25!titlebg}\vrule width 0.4mm}\hfill}
+\setlist{leftmargin=1.3em, itemsep=0.35em, topsep=0.4em, parsep=0pt}
+
+\pagestyle{empty}
+\begin{document}
+\color{ink}
+\begin{tcbposter}[
+  coverage={spread, interior style={fill=page}},
+  poster={showframe=false, columns=3, rows=1, colspacing=12mm, rowspacing=10mm, width=566mm, height=813mm},
+  fontsize=15.5pt,
+  boxes={enhanced, colback=panel, colframe=panel, boxrule=0mm, arc=3mm, left=8mm, right=8mm, top=7mm,
+         bottom=8mm, before upper={\setlength{\parskip}{0.55em}\raggedright}},
+]
+
+% ---- header ------------------------------------------------------------------------------------------------
+\posterbox[colback=titlebg, colframe=titlebg, left=14mm, right=14mm, top=10mm, bottom=9mm, before upper={}]
+  {name=header, column=1, span=3, below=top}{%
+  {\display\bfseries\fontsize{80}{84}\selectfont\color{white}Your VLA is Secretly \textcolor{knn}{kNN}\par}
+  \vspace{3.5mm}
+  \begin{minipage}{0.86\linewidth}
+    {\display\fontsize{20}{26}\selectfont\color{white!80!titlebg}A nearest-neighbour lookup over the demonstrations,
+      with no training, is a probe for vision-language-action models: it shows how much of a benchmark is retrieval,
+      how good a VLA's backbone is, and what its action expert adds. LIBERO and LIBERO-plus, five LeRobot VLAs.\par}
+  \end{minipage}\par
+  \vspace{3.5mm}
+  {\fontsize{17}{21}\selectfont\color{white!62!titlebg}Denis Grachev\quad·\quad Sereact\par}
+  \vspace{5.5mm}{\color{white!22!titlebg}\rule{\linewidth}{0.4mm}}\par\vspace{5mm}
+  \noindent
+  \stat{\KnnAvg\%}{LIBERO success of a kNN lookup over the demos: no training, on par with a diffusion transformer.}\statsep
+  \stat{\SharedMin\textendash\SharedMax\%}{of every VLA's successes are also a plain ImageNet lookup's, episode by episode.}\statsep
+  \stat{\GainSmol\ \textcolor{white!60!titlebg}{vs}\ \GainPi}{what the action expert adds over a lookup on its own VLM:
+    SmolVLA vs $\pi_{0.5}$.}\statsep
+  \stat{$\rho$\,=\,\NmFairRho}{an offline neighbour metric ranks backbones by their closed-loop lookup success.}}
+
+% ---- footer ------------------------------------------------------------------------------------------------
+\posterbox[colback=page, colframe=page, top=0mm, bottom=0mm, left=2mm, right=2mm, before upper={}]
+  {name=footer, column=1, span=3, above=bottom}{%
+  {\fontsize{12}{15}\selectfont\color{muted}Code: \texttt{lerobot\_policy\_knn}, a LeRobot policy plugin
+   (\texttt{uv sync --extra all}); every number and figure is regenerated from the experiment logs by
+   \texttt{make}.\hfill Baselines: OpenVLA, OpenVLA-OFT papers, LeRobot docs. VLAs: LeRobot Hub checkpoints.\par}}
+
+% ============================================ LEFT ==========================================================
+\posterbox{name=left, column=1, between=header and footer}{%
+\sectionhead{1}{A kNN probe}
+
+\block{The claim}
+A VLA maps camera images, an instruction and the robot state to a chunk of future actions. We ask whether it
+effectively factorises into an \textbf{embedding} $\phi$, its VLM (the \emph{backbone}), and a \textbf{lookup} over the
+demonstration frames $(o_i, a_{t_i:t_i+H})$ it was trained on:
+\[
+  \pi(o)\;\approx\sum_{i\,\in\,\mathcal N_k(\phi(o))} w_i\, a_{t_i:t_i+H},\qquad
+  w_i \propto e^{-\lVert\phi(o)-\phi(o_i)\rVert^2/\tau}
+\]
+A lookup needs no training, so it is a measuring stick for three questions:
+\begin{enumerate}
+  \item \textbf{How hard is the task?} What a \knnword\ over generic image features already solves (\S2).
+  \item \textbf{How good is the backbone?} The lookup keyed on the VLA's own VLM, or offline, whether close
+        embeddings have close actions (\S3).
+  \item \textbf{How good is the action expert?} What the VLA adds beyond that lookup (\S3).
+\end{enumerate}
+
+\block{A kNN policy in LeRobot}
+\begin{tikzpicture}[x=1cm,y=1cm,font=\fontsize{13}{16}\selectfont,
+    demo/.style={line width=0.9mm, draw=human!45, line cap=round},
+    dots/.style={postaction={decorate}, decoration={markings,
+        mark=between positions 0.03 and 0.97 step 0.058 with {\fill[human] (0,0) circle (0.95mm);}}},
+    nb/.style={circle, fill=knn, draw=white, line width=0.45mm, minimum size=4.6mm, inner sep=0},
+    box/.style={rounded corners=2mm, draw=hair, line width=0.45mm, fill=panel, align=center, inner sep=2mm}]
+  \fill[tint, rounded corners=2.5mm] (0,0) rectangle (16.4,6.6);
+  \draw[demo, dots] (0.6,2.6) .. controls (5.5,2.8) and (10,4.2) .. (15.8,4.7) coordinate[pos=0.56](a) coordinate[pos=0.69](a2);
+  \draw[demo, dots] (0.6,3.6) .. controls (5.5,3.7) and (9.5,5.0) .. (15.8,5.4) coordinate[pos=0.54](b) coordinate[pos=0.67](b2);
+  \draw[demo, dots] (0.6,2.0) .. controls (6,2.1) and (10,2.85) .. (15.8,3.3) coordinate[pos=0.58](c) coordinate[pos=0.71](c2);
+  \draw[demo, dots] (0.6,4.6) .. controls (3.5,4.7) and (5.5,5.1) .. (7.6,5.35);
+  \coordinate (q) at ($(a)!0.45!(b)+(0.15,0.07)$);
+  % query path: observation -> phi -> point in the memory
+  \node[box] (phi) at ($(q)+(0,3.55)$) {embedding $\phi$\\(frozen encoder or VLM)};
+  \node[box, left=7mm of phi] (obs) {observation $o_t$\\2 cameras, prompt, state};
+  \draw[-{Latex[length=3.5mm,width=3.5mm]}, line width=0.7mm, ink2] (obs) -- (phi);
+  \draw[-{Latex[length=3.5mm,width=3.5mm]}, line width=0.7mm, ink2] (phi.south) -- ($(q)+(0,0.55)$);
+  \foreach \n in {a,b,c} \draw[knn, line width=0.5mm, dash pattern=on 1.5mm off 1.1mm] (q) -- (\n);
+  \foreach \n/\m in {a/a2,b/b2,c/c2} {\draw[-{Latex[length=3.5mm,width=3.5mm]}, line width=1mm, knn!70] (\n) -- (\m);
+                                      \node[nb] at (\n) {};}
+  \draw[-{Latex[length=5mm,width=5mm]}, line width=1.7mm, knn] (q) -- ($(q)+1.25*($(a2)-(a)$)$);
+  \node[star, star points=5, fill=ink, draw=white, line width=0.45mm, minimum size=8mm, inner sep=0] at (q) {};
+  \node[left=2.5mm of q, font=\fontsize{13.5}{15}\selectfont\bfseries, fill=tint, inner sep=0.8mm] {$\phi(o_t)$};
+  \node[anchor=north west, font=\fontsize{12.5}{15}\selectfont\bfseries, text=ink2, inner sep=1mm] at (0.2,6.45)
+    {memory: every 2nd demo frame of the task};
+  \node[anchor=south east, font=\fontsize{12.5}{15}\selectfont\bfseries, text=knn, align=right, inner sep=1mm]
+    at (16.2,0.15) {$k$ nearest frames ($\le 1$ per demo): average\\the chunks that followed, execute, repeat};
+\end{tikzpicture}
+\begin{itemize}
+  \item \textbf{Memory}: every 2nd frame of the 1{,}693 demos (137k keys) with the chunk that followed.
+        ``Training'' is embedding them: minutes, no gradient step.
+  \item \textbf{Key} $\phi$: a frozen ImageNet ResNet-18 (layer 3, 4$\times$4 grid, both cameras), or the hidden
+        states of any VLA's VLM (\S3).
+  \item \textbf{Act}: average the chunks of the $k$ nearest frames of the task, $\le$1 per demo (0.5\,ms). The
+        \emph{full method} adds state and prompt distances, mode seeking and temporal ensembling; the \emph{plain
+        lookup} none of these.
+\end{itemize}
+
+\block{Setup}
+\textbf{LIBERO}: 4 suites $\times$ 10 tasks, $\sim$42 demos per task, 2 cameras. Tuned on initial states 40--49
+and 0--19; every comparison uses the same 400 episodes (20--29); the headline is the official \texttt{lerobot-eval}
+(0--49). \textbf{VLAs}: LeRobot Hub LIBERO fine-tunes of SmolVLA (0.45B), X-VLA (0.9B), $\pi_0$, $\pi_0$-FAST,
+$\pi_{0.5}$ (3B); a multi-task DiT trained here.
+
+\block{What the lookup needs}
+\fig{ablations.pdf}
+\textbf{The representation, the prompt and the data do the work.} Without the prompt, success falls to
+\AblNoLang\% (Goal: \AblNoLangGoal\%, where only the instruction differs), with raw pixels to \AblPixels\%, with a
+single neighbour to \AblKOne\%, with 10\% of the demos to \DemosTen\%; the extras move it by about a point each:
+\hl{the memory is the model}.
+}
+
+% ============================================ MIDDLE ========================================================
+\posterbox{name=middle, column=2, between=header and footer}{%
+\sectionhead{2}{How hard is the task?}
+
+\block{LIBERO rewards retrieval}
+\fig{leaderboard.pdf}
+A lookup with no training is above Diffusion Policy, Octo and OpenVLA and \textbf{on par with LeRobot's multi-task
+diffusion transformer} (\DitDocsAvg\%; per suite \KnnSpatial/\KnnObject/\KnnGoal/\KnnLong). \hl{\TasksNinetyPlain\ of the \NTasks\ tasks} are solved in at least 90\% of episodes by the
+plain lookup over ImageNet features (\TasksNinetyFull\ by the full method); the hard ones are long-horizon.
+
+\ifhavewins
+\block{Which episodes need more than a lookup?}
+Same 400 episodes, each VLA against the plain ImageNet lookup (\KnnPlainResnet\%); VLA success after its name.
+\fig{episode_wins.pdf}
+\textbf{\SharedMin--\SharedMax\% of every VLA's successes are also the lookup's.} VLAs differ in the rest: where the
+lookup fails, $\pi_{0.5}$ still succeeds in \RescuePi\% of the episodes and X-VLA in \RescueXvla\%, SmolVLA in
+\RescueSmol\% and $\pi_0$ in \RescuePiZero\%, and the weaker ones also lose episodes the lookup solves
+(SmolVLA \LosesSmol, $\pi_0$ \LosesPiZero).
+\fi
+
+\block{A diffusion head behaves like kNN}
+We trained LeRobot's multi-task DiT on the same demos (reduced budget, \DitOurs\% success) and recorded all
+\DitChunks\ chunks it generated from unseen initial states.
+\fig{dit_vs_knn.pdf}
+\textbf{Its outputs are not new}: a DiT chunk is as close to some training chunk (median \DitTrainMed) as a new
+human demonstration is to the other demos (\HumanMed).
+\textbf{Its outputs are the kNN answer}: at the same state it is as far from the kNN average (\DitKnnMed) as kNN's
+own neighbours are (\KnnSpreadMed), and the grippers agree \GripAgree\% of the time.
+
+\ifhaveplus
+\block{Off the demonstrations: LIBERO-plus}
+The same 40 tasks under seven perturbations: every policy runs the same \PlusN\ variants (\PlusPerCat\ per
+perturbation; not the published leaderboard's set), next to its clean LIBERO success.
+\fig{libero_plus.pdf}
+\textbf{A lookup degrades no more than the best VLA} (points lost: kNN \PlusKnnDrop, $\pi_{0.5}$ \PlusPiDrop, X-VLA
+\PlusXvlaDrop, SmolVLA \PlusSmolDrop, $\pi_0$-FAST \PlusFastDrop). \textbf{Weak VLAs key on the wording}: reworded
+instructions over the original scenes drop SmolVLA, $\pi_0$-FAST and $\pi_0$ to \PlusSmolLanguage, \PlusFastLanguage\ and
+\PlusPiZeroLanguage\% (original wording: \PlusSmolCtrl, \PlusFastCtrl, \PlusPiZeroCtrl\%). X-VLA fails under a camera
+shift (\PlusXvlaCamera\%).
+\else
+\block{When does the lookup fail?}
+\fig{failures.pdf}
+On LIBERO-Long (\DiagN\ diagnosed episodes), no successful episode ever strayed further than \DiagOkMax$\times$ the
+typical distance from its nearest demonstration frame; all \DiagBad\ failures went beyond \DiagBadMin$\times$, e.g.\
+after a missed grasp left the scene in a state no demo visits. A lookup cannot extrapolate beyond its memory.
+\fi
+}
+
+\posterbox[colback=titlebg, colframe=titlebg, colupper=white, left=8mm, right=8mm, top=7mm, bottom=7mm,
+           before upper={\setlength{\parskip}{0.5em}\raggedright}]{name=takeaways, column=3, above=footer}{%
+  {\display\bfseries\fontsize{20}{24}\selectfont Takeaways\par}
+  \begin{itemize}
+    \item \textbf{LIBERO is mostly retrieval}: a lookup with no training reaches \KnnAvg\%, and \SharedMin--\SharedMax\%
+          of every VLA's successes are also a plain ImageNet lookup's. Under LIBERO-plus perturbations it degrades no
+          more than $\pi_{0.5}$, while the weaker VLAs lose 30--64 points.
+    \item \textbf{Small VLAs are secretly kNN}: SmolVLA's action expert is worse than a lookup on its own VLM
+          (\GainSmol); $\pi_{0.5}$'s adds \GainPi, most on long tasks.
+    \item \textbf{Backbones can be scored offline}: local action consistency ranks them ($\rho$\,=\,\NmFairRho), and
+          a key trained for it lifts the lookup \KnnPlainResnet\,$\to$\,\KnnLearnt\%.
+    \item Report a \textbf{kNN baseline} with every VLA result on a dense-demonstration benchmark.
+  \end{itemize}
+  {\fontsize{13}{17}\selectfont\color{white!68!titlebg}\textbf{Limits.} LIBERO has about 42 demos per task and test
+   scenes close to them, so it rewards retrieval. Nothing here says a lookup generalises to new objects, scenes or
+   tasks; that is exactly what a good $\phi$ has to provide.\par}
+}
+
+% ============================================ RIGHT =========================================================
+\posterbox{name=right, column=3, between=header and takeaways}{%
+\sectionhead{3}{Backbone vs action expert}
+
+\ifhavediag
+\block{A VLA against a lookup on its own VLM}
+The plain lookup keyed on a VLA's own VLM scores its backbone; the VLA's excess over it is its action expert's.
+\fig{diagnostic.pdf}
+\textbf{SmolVLA's action expert makes it worse} than a lookup on its own VLM (\VlaSmol\% vs \KnnSmolLiberoGrid\%);
+\textbf{$\pi_{0.5}$'s adds \GainPi\ points}. Under LIBERO-plus perturbations the gaps widen: SmolVLA
+\textbf{\PlusGainSmol}, X-VLA \PlusGainXvla, $\pi_{0.5}$ \PlusGainPi. $\pi_0$'s fine-tune broke its own key (its base
+VLM keys a \KnnPiZeroBaseLt\% lookup).
+\fi
+
+\block{Reading a VLM as a key}
+\fig{vlm_keys.pdf}
+A fair backbone score needs the right key. $\pi_{0.5}$ puts $\sim$80\% of its energy in 8 of 2{,}048 channels:
+standardise every dimension (\KnnPiLibero\,$\to$\,\KnnPiLiberoZ\%) and read layer 12 of 18 (\KnnPiLiberoLt\%); a
+whitened stack of layers 12, 15 and 18 does not help (\KnnPiLiberoMulti\%). Fine-tuning improves SmolVLA's key, not
+$\pi_{0.5}$'s (\KnnPiBaseLt\,$\to$\,\KnnPiLiberoLt\%).
+
+\ifhaveneighbors
+\block{Scoring a backbone without rollouts}
+A lookup only uses the nearest neighbours, so we score a key by its \textbf{local action consistency}: LAC@8\,=\,1\,$-$
+action distance to its 8 nearest frames of other demos\,/\,to a random frame of the task (held-out queries).
+\fig{neighbors.pdf}
+\textbf{LAC ranks backbones} ($\rho$\,=\,\NmFairRho\ over the \NmFairN\ keys that never saw these demos; over all
+pairs, $\rho$\,=\,\NmFairGlobalRho). Fine-tuned VLMs score higher on their own training demos (hollow).
+\textbf{A key trained for LAC} (one linear map per ResNet grid cell, soft-kNN loss, 90\% of demos) lifts it
+\NmResnet\,$\to$\,\NmLearnt\ and the lookup \KnnPlainResnet\,$\to$\,\hl{\KnnLearnt\%} (full method \KnnFullLearnt\%).
+\fi
+
+}
+\end{tcbposter}
+\end{document}
