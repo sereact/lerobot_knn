@@ -19,8 +19,8 @@ recordings (neo-cortex LeRobot export) the policy was trained on.
 
 It runs as an ordinary process next to derroboter's Docker container: the container uses host networking, so its Zenoh
 router is ``tcp/127.0.0.1:7447`` on the robot PC (``--connect``; ``ZENOH_CONFIG`` overrides it). derroboter itself
-needs Python 3.10 and is not installed: the server needs Zenoh and FlatBuffers, and imports derroboter's payload codec
-(one module, numpy/torch/flatbuffers only) from a derroboter checkout on the host (``--derroboter_src``):
+needs Python 3.10 and is not installed: the server needs Zenoh and FlatBuffers, and decodes requests with the copy of
+derroboter's payload codec next to it (``zenoh_fb_policy_protocol.py``; ``--derroboter_src`` uses a checkout's):
 
     uv pip install eclipse-zenoh==1.9.0 flatbuffers==25.9.23
 
@@ -211,8 +211,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--derroboter_src",
-        default=os.environ.get("DERROBOTER_SRC", "~/git/derroboter/derroboter/src"),
-        help="derroboter's src dir, for its policy payload codec",
+        default=os.environ.get("DERROBOTER_SRC"),
+        help="a derroboter checkout's src dir, to use its payload codec instead of the copy next to this script",
     )
     parser.add_argument(
         "--rename_map",
@@ -240,8 +240,12 @@ def main() -> None:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True
     )
 
-    sys.path.insert(0, str(Path(args.derroboter_src).expanduser()))
-    protocol = importlib.import_module(PROTOCOL_MODULE)
+    if args.derroboter_src:
+        sys.path.insert(0, str(Path(args.derroboter_src).expanduser()))
+        protocol = importlib.import_module(PROTOCOL_MODULE)
+    else:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        protocol = importlib.import_module("zenoh_fb_policy_protocol")
     session = open_session(args.connect)  # before loading the policy: a missing router fails fast
 
     handler = PolicyHandler(
