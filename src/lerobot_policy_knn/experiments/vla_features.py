@@ -1,6 +1,6 @@
 """Embed every (even) frame of ``lerobot/libero`` with a VLA backbone and cache the pooled hidden states.
 
-    uv run python -m lerobot_policy_knn.experiments.vla_features smolvla_libero smolvla_base smolvlm2
+    uv run python -m lerobot_policy_knn.experiments.vla_features smolvla_libero smolvla_base
 
 Unlike image encoders, a VLA embeds both cameras, the prompt and the state together, so episodes are decoded
 camera-by-camera in lockstep. Only rows with ``frame_index % stride == 0`` are stored (compact arrays plus a

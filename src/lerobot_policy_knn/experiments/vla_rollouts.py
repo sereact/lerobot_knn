@@ -53,7 +53,7 @@ def build_runner(
     )
     runner = VLARollout(policy, pre, post, n_action_steps=steps,
                         record_init_states=record, action_transform=action_transform,
-                        actions_minus_state=spec.actions_minus_state, camera_rename=spec.camera_rename)  # fmt: skip
+                        camera_rename=spec.camera_rename)  # fmt: skip
     return runner, env_pre, control_mode
 
 

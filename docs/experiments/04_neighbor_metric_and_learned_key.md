@@ -21,36 +21,46 @@ Every key is normalised exactly as the policy does it, through the shared `fit_k
 
 ## Results (held-out queries; `outputs/vla/neighbor_metric_heldout.json`)
 
-| Key | LAC@8 | Closed-loop plain lookup | Saw these demos? |
+Closed-loop success is the plain lookup with that key on the official protocol (2,000 episodes;
+`neighbor_metric --correlate --protocol full50`). "Fair" keys never saw these demos.
+
+| Key | LAC@8 | Closed-loop plain lookup | Fair? |
 |---|---|---|---|
-| ResNet-18 grid | 0.790 | 87.3 | no |
-| ResNet-18 grid, **learnt key** | **0.821** | **90.5** | trained on the other 90% |
-| DINOv2-S | 0.756 | 74.5 | no |
-| SmolVLA base grid / mean | 0.769 / 0.749 | 74.5 / 62.3 | no |
-| SmolVLA LIBERO grid / mean | 0.840 / 0.834 | 85.3 / 77.8 | yes |
-| π0.5 base last / L12 / L15 | 0.805 / 0.811 / 0.803 | 81.3 / 88.5 / 82.3 | no |
-| π0.5 base L12 PCA / L12+15+18 PCA | 0.813 / 0.810 | 88.0 / 84.5 | no |
-| π0.5 LIBERO last raw / last / L12 / L15 | 0.798 / 0.829 / 0.829 / 0.832 | 71.0 / 79.3 / 84.5 / 79.0 | yes |
-| π0.5 LIBERO L12 PCA / L12+15+18 PCA | 0.813 / 0.824 | 79.8 / 80.5 | yes |
+| ResNet-18 grid | 0.790 | 88.7 | yes |
+| ResNet-18 grid, **learnt key** | 0.821 | **93.0** | yes (trained on the other 90%) |
+| DINOv2-S | 0.756 | 73.1 | yes |
+| SmolVLA base / LIBERO grid | 0.769 / 0.840 | 76.3 / 86.5 | yes / no |
+| π0.5 base / LIBERO L12 | 0.811 / 0.829 | 85.4 / 81.8 | yes / no |
+| π0 base / LIBERO L12 | 0.809 / **0.548** | 86.9 / **17.9** | yes / no |
+| π0-FAST base / LIBERO L12 | 0.811 / 0.880 | 86.6 / 95.0 | yes / no |
+| X-VLA base / LIBERO L8 | 0.796 / 0.821 | 83.3 / 88.5 | yes / no |
+| VLA-JEPA base / LIBERO L7 | 0.796 / 0.822 | 84.0 / 83.0 | yes / no |
+| Evo-1 base / LIBERO L10 | 0.760 / 0.880 | 62.1 / 87.1 | yes / no |
+| MolmoAct2 base / LIBERO L27 | 0.808 / 0.844 | 78.6 / 91.3 | yes / no |
+| GR00T N1.7 frozen VLM L4 | 0.785 | 87.5 | yes |
 
-## Does it predict closed-loop success?
+The file also holds the π0.5 and SmolVLA recipe variants of 03 (other layers, mean pooling, PCA), which are left out of
+the correlation (one key per backbone).
 
-| Keys | n | Spearman LAC@8 | Pearson LAC@8 | Spearman `global_rho` |
+## Does it track closed-loop success?
+
+| Keys | n | Pearson LAC@8 | Spearman LAC@8 | Spearman `global_rho` |
 |---|---|---|---|---|
-| never trained on LIBERO (the "fair" set, incl. the learnt key on held-out queries) | 10 | **0.90** | 0.91 | 0.31 |
-| all, including the fine-tuned VLMs | 18 | 0.33 | | −0.03 |
+| never trained on LIBERO (the "fair" set, incl. the learnt key) | 12 | **0.78** | **0.61** | 0.37 |
+| all, including the fine-tuned VLMs | 20 | 0.93 | 0.62 | 0.51 |
 
-- **Only close pairs matter.** LAC ranks the fair keys by their closed-loop success. The correlation over all pairs
-  (`global_rho`) does not; `local_rho` is even negatively related.
+- **LAC tracks the closed-loop success of a lookup with each key**, but does not rank close keys reliably (ρ 0.61):
+  most keys sit within a few hundredths of LAC and a few points of success. An earlier version on the 400 development
+  episodes, without π0's keys, gave ρ 0.90 over 10 fair keys; on the official protocol with every family the rank
+  correlation is weaker, so the claim is "tracks", not "ranks".
+- **It flags a broken backbone.** π0's fine-tuned key has LAC 0.548, against 0.76–0.88 for every other key; its lookup
+  scores 17.9%. Most of the all-keys Pearson correlation comes from that point.
+- **Only close pairs matter.** The correlation over all pairs (`global_rho`) is weaker; `local_rho` is even negatively
+  related.
 - **Memorisation inflates offline metrics.** The fine-tuned VLMs were trained on every one of these demos, including
-  our "held-out" ones, so their offline LAC is flattered. They sit below the fair keys' trend line, which is why the
-  correlation over all 18 keys is weak.
-- **Before vs after fine-tuning, LAC goes up:**
-  - SmolVLA 0.769 → 0.840;
-  - π0.5 L12 0.811 → 0.829.
-
-  For π0.5 that gain does not carry over to closed loop (88.5 → 84.5): the offline increase is the memorisation
-  effect.
+  our "held-out" ones, so their offline LAC is flattered: LAC rises with fine-tuning for every family except π0
+  (e.g. π0.5 0.811 → 0.829) while π0.5's and VLA-JEPA's closed loop slightly drops. On fine-tuned VLMs LAC measures
+  memorisation too. LIBERO-plus demos, which no checkpoint saw, remove that confound (05, `plus_neighbor_metric`).
 
 ## Training a key for LAC (`experiments/learn_key.py`)
 
@@ -61,16 +71,18 @@ Every key is normalised exactly as the policy does it, through the shared `fit_k
   256 queries against 2,048 candidates.
 - **Data.** Only the `train` episodes (90%) of `outputs/vla/split.json`.
 - **Output.** Saved as `key_norm="file:outputs/vla/learned_key_resnet.pt"`: mean, std and a block-diagonal
-  projection per camera. The unchanged kNN policy uses it.
+  projection per camera. The unchanged kNN policy uses it (`outputs/vla/configs/plain_resnet18_l3_learned.json`,
+  `full_resnet18_l3_learned.json`).
 
 | | before | after |
 |---|---|---|
 | held-out LAC@8 (`learn_key`'s own evaluation; memory = train demos) | 0.800 | 0.821 |
 | held-out kNN R² (same) | 0.779 | 0.803 |
 | held-out LAC@8 (`neighbor_metric --heldout`) | 0.790 | 0.821 |
-| **closed loop, plain lookup** | 87.3 | **90.5** |
-| **closed loop, full method** (`v2_39` + learnt key) | 90.6 | **91.5** |
+| **closed loop, plain lookup** (official protocol) | 88.7 | **93.0** |
+| **closed loop, full method** (`v2_39` + learnt key, `lerobot-eval`) | 91.7 | **93.0** |
+| LIBERO-plus, plain lookup / full method | 75.5 / 82.4 | 76.7 / 81.7 |
 
 **Reading.** Optimising "close embeddings → close actions" directly improves the kNN in closed loop. The plain lookup
-gains 3.2 points, above noise, and matches the hand-tuned full method with none of its extras. The full method gains
-0.9, which is within noise.
+gains 4.3 points and overtakes the hand-tuned full method with none of its extras; the full method gains 1.3. Under
+perturbation the learnt key helps the plain lookup a little and the full method not at all.

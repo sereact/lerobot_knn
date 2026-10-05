@@ -25,7 +25,7 @@ import numpy as np
 import torch
 from torch import Tensor, nn
 
-from lerobot.utils.constants import OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
+from lerobot.utils.constants import OBS_IMAGES, OBS_LANGUAGE_ATTENTION_MASK, OBS_LANGUAGE_TOKENS, OBS_STATE
 
 from .encoders import _grid_pool
 
@@ -42,16 +42,6 @@ class VLASpec:
     weights: str | None  # hub repo or local dir; None = VLM initialised from its original (non-robot) weights
     processor: str  # where the LIBERO pre/post processors (normalisation stats, tokenizer) come from
     note: str = ""
-    # Physical Intelligence's LIBERO checkpoints, run as openpi trained them (openpi/src/openpi/training/config.py):
-    norm_stats: str | None = None  # openpi norm_stats.json replacing the processor's normalisation statistics
-    state_in_prompt: bool = (
-        True  # False: pi0.5 with discrete_state_input=False, prompt = task + "\n", no state
-    )
-    chunk_size: int | None = None  # the checkpoint's action_horizon, if it differs from its config
-    actions_minus_state: int = (
-        0  # openpi extra_delta_transform: the first n action dims are predicted minus the state
-    )
-    strict: bool = True  # False: ignore legacy normaliser buffers in the weights (LeRobot < 0.4 checkpoints)
     # each family's documented LIBERO evaluation settings (docs/source/<policy>.mdx)
     config_overrides: dict[str, Any] = field(default_factory=dict)  # policy config fields set before loading
     revision: str | None = None  # pinned Hub revision of weights and processors
@@ -68,7 +58,6 @@ class VLASpec:
 
 SMOLVLA_LIBERO = "lerobot/smolvla_libero"
 VLA_SPECS: dict[str, VLASpec] = {
-    "smolvlm2": VLASpec("smolvla", None, SMOLVLA_LIBERO, "SmolVLM2-500M, no robot data"),
     "smolvla_base": VLASpec(
         "smolvla", "lerobot/smolvla_base", SMOLVLA_LIBERO, "SmolVLA pretrained, no LIBERO"
     ),
@@ -84,39 +73,6 @@ VLA_SPECS: dict[str, VLASpec] = {
         "lerobot/pi05_libero_finetuned_v044",
         "lerobot/pi05_libero_finetuned_v044",
         "pi0.5 fine-tuned on LIBERO",
-    ),
-    # official ladders (LeRobot Hub collections): base -> Physical Intelligence's LIBERO fine-tune -> +LeRobot fine-tune
-    # lerobot/pi05_libero_base ships no normaliser statistics; openpi trains pi0.5 LIBERO with quantile normalisation,
-    # so borrow the processors of LeRobot's quantile-normalised LIBERO fine-tune (checked offline, hub_sanity.json)
-    "pi05_libero_pi": VLASpec(
-        "pi05",
-        str(VLA_ROOT / "pi05_libero_base_bf16"),
-        "lerobot/pi05_libero_finetuned_quantiles_v044",
-        "PI's pi0.5 LIBERO",
-    ),
-    # lerobot/pi05_libero_base and pi0_libero_base ship no statistics and LeRobot's default pi0.5 prompt carries the
-    # state; openpi trained PI's pi0.5 LIBERO without state tokens and 10-step chunks, and PI's pi0 LIBERO on actions
-    # minus the state (extra_delta_transform). Stats: gs://openpi-assets/checkpoints/<name>/assets/.../norm_stats.json
-    "pi05_libero_openpi": VLASpec(
-        "pi05",
-        str(VLA_ROOT / "pi05_libero_base_bf16"),
-        "lerobot/pi05_libero_finetuned_quantiles_v044",
-        "PI's pi0.5 LIBERO, openpi inputs",
-        norm_stats=str(VLA_ROOT / "openpi_assets/pi05_libero_norm_stats.json"),
-        state_in_prompt=False,
-        chunk_size=10,
-    ),
-    "pi0_libero_openpi": VLASpec(
-        "pi0",
-        "lerobot/pi0_libero_base",
-        "lerobot/pi0_libero_finetuned_v044",
-        "PI's pi0 LIBERO, openpi inputs",
-        norm_stats=str(VLA_ROOT / "openpi_assets/pi0_libero_norm_stats.json"),
-        actions_minus_state=6,
-        strict=False,
-    ),
-    "pi05_libero_more": VLASpec(
-        "pi05", "lerobot/pi05-libero", "lerobot/pi05-libero", "pi05_libero_finetuned + 20k steps"
     ),
     # X-VLA (Florence-2 backbone): pretrained base -> LeRobot's LIBERO fine-tune
     "xvla_base": VLASpec("xvla", "lerobot/xvla-base", "lerobot/xvla-libero", "X-VLA base, no LIBERO"),
@@ -153,7 +109,10 @@ VLA_SPECS: dict[str, VLASpec] = {
     # the raw base checkpoint with a LIBERO checkpoint's saved processors: its VLM is bit-identical to the one every
     # LIBERO checkpoint above keeps (they froze it), so this is GR00T's key, on the images its LIBERO policies see
     "groot_base": VLASpec(
-        "groot", "nvidia/GR00T-N1.7-3B", "nvidia/gr00t17-lerobot-libero_spatial-640", "GR00T N1.7 base",
+        "groot",
+        "nvidia/GR00T-N1.7-3B",
+        "nvidia/gr00t17-lerobot-libero_spatial-640",
+        "GR00T N1.7 base",
         config_overrides={"embodiment_tag": "libero_sim"},
     ),
     # MolmoAct2 (LeRobot port): wrist camera as "wrist_image", continuous actions in bfloat16
@@ -168,6 +127,30 @@ VLA_SPECS: dict[str, VLASpec] = {
             "train_mode_vlm": "fft",
             "dtype": "bfloat16",
             "enable_inference_cuda_graph": False,
+        },  # fmt: skip
+        camera_rename={"observation.images.image2": "observation.images.wrist_image"},
+        n_action_steps=0,
+        # the Hub config predates #4249: training-only switches (all off) and the dtype field's old name
+        legacy_config={
+            "enable_lora_vlm": None,
+            "enable_lora_action_expert": None,
+            "train_action_expert_only": None,
+            "model_dtype": "dtype",
+        },  # fmt: skip
+    ),
+    # the released base, built from its HF checkpoint with the LIBERO fine-tune's processors and camera layout
+    "molmoact2_base": VLASpec(
+        "molmoact2",
+        None,
+        "allenai/MolmoAct2-LIBERO-LeRobot",
+        "MolmoAct2 before LIBERO (allenai/MolmoAct2)",
+        config_overrides={
+            "inference_action_mode": "continuous",
+            # the checkpoint is a full fine-tune (enable_lora_vlm=False): no LoRA wrapping, or its keys do not load
+            "train_mode_vlm": "fft",
+            "dtype": "bfloat16",
+            "enable_inference_cuda_graph": False,
+            "checkpoint_path": "allenai/MolmoAct2",  # the network is built from this HF checkpoint
         },  # fmt: skip
         camera_rename={"observation.images.image2": "observation.images.wrist_image"},
         n_action_steps=0,
@@ -209,10 +192,39 @@ VLA_SPECS: dict[str, VLASpec] = {
         observation_size=448,
         n_action_steps=14,
     ),
+    # no Evo-1 checkpoint before LIBERO: its VLM as published, built from evo1_libero's config (action head unused)
+    "evo1_base": VLASpec(
+        "evo1",
+        None,
+        "zuoxingdong/evo1_libero",
+        "Evo-1's VLM before LIBERO: the raw InternVL3-1B (its first 14 layers)",
+        revision="515921f4a2c1d3f3ad523721eafa26fdf2af315b",
+        config_overrides={
+            "vlm_model_name": "OpenGVLab/InternVL3-1B-hf",
+            "use_amp": True,
+            "vlm_dtype": "bfloat16",
+            "use_flash_attn": False,
+            "enable_gradient_checkpointing": False,
+            "vlm_num_layers": 14,
+            "image_resolution": [448, 448],
+            "max_text_length": 1024,
+            "chunk_size": 50,
+            "n_action_steps": 14,
+            "max_state_dim": 24,
+            "max_action_dim": 24,
+            "num_inference_timesteps": 32,
+            "postprocess_action_dim": 7,
+            "binarize_gripper": True,
+            "gripper_threshold": 0.0,
+            "gripper_below_threshold_value": -1.0,
+            "gripper_above_threshold_value": 1.0,
+        },  # fmt: skip
+        observation_size=448,
+        n_action_steps=14,
+    ),
     "pi0_base": VLASpec(
         "pi0", str(VLA_ROOT / "pi0_base_bf16"), "lerobot/pi0_libero_finetuned_v044", "pi0 base"
     ),
-    "pi0_libero_pi": VLASpec("pi0", "lerobot/pi0_libero_base", "lerobot/pi0_libero_base", "PI's pi0 LIBERO"),
     "pi0_libero": VLASpec(
         "pi0", "lerobot/pi0_libero_finetuned_v044", "lerobot/pi0_libero_finetuned_v044", "pi0 LIBERO"
     ),
@@ -258,6 +270,8 @@ def load_vla(name: str, device: str = "cuda", dtype: str | None = None):
         cfg = proc_cfg
         cfg.load_vlm_weights = True  # the VLM's own pretrained weights; action expert stays random
         cfg.device = device
+        for key, value in spec.config_overrides.items():
+            setattr(cfg, key, value)
         policy = cls(cfg)
     else:
         cfg = _pretrained_config(spec.weights, spec)
@@ -267,17 +281,13 @@ def load_vla(name: str, device: str = "cuda", dtype: str | None = None):
         cfg.device = device
         if dtype is not None and hasattr(cfg, "dtype"):
             cfg.dtype = dtype
-        if spec.chunk_size is not None:
-            cfg.chunk_size = spec.chunk_size
-            cfg.n_action_steps = min(cfg.n_action_steps, spec.chunk_size)
         for key, value in spec.config_overrides.items():
             setattr(cfg, key, value)
         if getattr(cfg, "compile_model", False):
             # some Hub checkpoints ship compile_model=True (max-autotune): it recompiles for every batch size the
             # evaluation pool sends and stalls for many minutes, so run eagerly
             cfg.compile_model = False
-        # a strict load that meets legacy buffers prints a warning and returns the model *without* its weights
-        kwargs: dict[str, Any] = {} if spec.strict else {"strict": False}
+        kwargs: dict[str, Any] = {}
         if spec.revision is not None:
             kwargs["revision"] = spec.revision
         policy = cls.from_pretrained(spec.weights, config=cfg, **kwargs)
@@ -322,29 +332,80 @@ def _load_groot(spec: VLASpec, device: str):
 
     cfg = GrootConfig(base_model_path=spec.weights, device=device, **spec.config_overrides)
     policy = make_policy(cfg, env_cfg=LiberoEnvConfig()).to(device).eval().requires_grad_(False)
-    pretrained = spec.processor if spec.processor != spec.weights else None  # another checkpoint's saved processors
+    pretrained = (
+        spec.processor if spec.processor != spec.weights else None
+    )  # another checkpoint's saved processors
     pre, post = make_pre_post_processors(
         cfg, pretrained_path=pretrained, preprocessor_overrides={"device_processor": {"device": device}}
     )
     return policy, pre, post
 
 
+class XVLAFromDatasetFormat:
+    """Dataset-format LIBERO observations -> X-VLA's own LIBERO convention.
+
+    Dataset format (``lerobot/libero``, the env's default ``LiberoProcessorStep``): both cameras rotated by 180°, an
+    8-D state (end-effector position, axis-angle, gripper joints). X-VLA's ``LiberoProcessorStep`` rotates only the
+    agent view and builds a 20-D state: [position, 6-D rotation, 0] followed by ten zeros.
+    """
+
+    def __init__(self) -> None:
+        from lerobot.policies.xvla.processor_xvla import LiberoProcessorStep as XVLALiberoProcessorStep
+
+        self._rot6d = XVLALiberoProcessorStep()._mat_to_rotate6d  # noqa: SLF001
+
+    def __call__(self, transition):
+        from lerobot.processor import TransitionKey
+
+        obs = dict(transition[TransitionKey.OBSERVATION])
+        wrist = f"{OBS_IMAGES}.image2"
+        if wrist in obs:
+            obs[wrist] = torch.flip(obs[wrist], dims=[-2, -1])
+        state = obs.get(OBS_STATE)
+        if state is not None and state.shape[-1] == 8:
+            state = state.float()
+            pos, aa = state[..., :3], state[..., 3:6]
+            # the simulator's end-effector matrix (X-VLA's source) is its quaternion's (the dataset's) rotated by -90°
+            # about z
+            mat = _axis_angle_to_matrix(aa) @ _RZ_MINUS_90.to(aa)
+            proprio = torch.cat([pos, self._rot6d(mat), torch.zeros_like(pos[..., :1])], dim=-1)
+            obs[OBS_STATE] = torch.cat([proprio, torch.zeros_like(proprio)], dim=-1)
+        return {**transition, TransitionKey.OBSERVATION: obs}
+
+    def transform_features(self, features):
+        return features
+
+    def get_config(self) -> dict[str, Any]:
+        return {}
+
+    def reset(self) -> None:
+        pass
+
+
+_RZ_MINUS_90 = torch.tensor([[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]])
+
+
+def _axis_angle_to_matrix(aa: Tensor) -> Tensor:
+    """Rodrigues' formula, batched: (..., 3) axis-angle -> (..., 3, 3) rotation matrices."""
+    theta = aa.norm(dim=-1, keepdim=True).clamp_min(1e-8)
+    k = aa / theta
+    kx, ky, kz = k.unbind(-1)
+    zero = torch.zeros_like(kx)
+    kmat = torch.stack([zero, -kz, ky, kz, zero, -kx, -ky, kx, zero], dim=-1).reshape(*aa.shape[:-1], 3, 3)
+    eye = torch.eye(3, dtype=aa.dtype, device=aa.device).expand_as(kmat)
+    s, c = torch.sin(theta)[..., None], torch.cos(theta)[..., None]
+    return eye + s * kmat + (1 - c) * kmat @ kmat
+
+
 def vla_processors(spec: VLASpec, cfg, device: str):
-    """The LIBERO pre/post processors of a VLA spec, with its openpi statistics and prompt format if it has them."""
+    """The LIBERO pre/post processors of a VLA spec."""
     from lerobot.policies.factory import make_pre_post_processors
 
-    pre_overrides: dict[str, Any] = {"device_processor": {"device": device}}
-    post_overrides: dict[str, Any] = {}
-    if spec.norm_stats is not None:
-        stats = openpi_norm_stats(spec.norm_stats, cfg)
-        pre_overrides["normalizer_processor"] = {"stats": stats}
-        post_overrides["unnormalizer_processor"] = {"stats": stats}
     pre, post = make_pre_post_processors(
         cfg,
         pretrained_path=spec.processor,
         pretrained_revision=spec.revision,
-        preprocessor_overrides=pre_overrides,
-        postprocessor_overrides=post_overrides,
+        preprocessor_overrides={"device_processor": {"device": device}},
     )
     if spec.family == "xvla":
         from lerobot.policies.xvla.processor_xvla import (
@@ -352,30 +413,16 @@ def vla_processors(spec: VLASpec, cfg, device: str):
             XVLAImageNetNormalizeProcessorStep,
         )
 
-        # X-VLA's LIBERO processing = the standard LiberoProcessorStep (the env's default) + these two steps; running
-        # them here keeps every consumer (rollouts, recordings, embedder) on standard dataset-format images
-        pre.steps = [XVLAImageNetNormalizeProcessorStep(), XVLAAddDomainIdProcessorStep(), *pre.steps]
-    if not spec.state_in_prompt:
-        from lerobot.policies.pi0.processor_pi0 import Pi0NewLineProcessor
-        from lerobot.policies.pi05.processor_pi05 import Pi05PrepareStateTokenizerProcessorStep
-
-        # openpi's prompt without state (PaligemmaTokenizer.tokenize with state=None): the task and a newline
-        pre.steps = [Pi0NewLineProcessor() if isinstance(st, Pi05PrepareStateTokenizerProcessorStep) else st
-                     for st in pre.steps]  # fmt: skip
+        # X-VLA's LIBERO processing is its own LiberoProcessorStep (not the env's default one) + these two steps.
+        # Running them here, after a conversion from dataset format, keeps every consumer (rollouts, recordings,
+        # embedder) on standard dataset-format observations.
+        pre.steps = [
+            XVLAFromDatasetFormat(),
+            XVLAImageNetNormalizeProcessorStep(),
+            XVLAAddDomainIdProcessorStep(),
+            *pre.steps,
+        ]
     return pre, post
-
-
-def openpi_norm_stats(path: str, cfg) -> dict[str, dict[str, np.ndarray]]:
-    """An openpi norm_stats.json as LeRobot normaliser statistics, cut to the policy's state and action sizes."""
-    import json
-
-    raw = json.loads(Path(path).read_text())["norm_stats"]
-    out = {}
-    for ours, theirs in ((OBS_STATE, "state"), ("action", "actions")):
-        feats = cfg.input_features if ours == OBS_STATE else cfg.output_features
-        n = feats[ours].shape[0]
-        out[ours] = {k: np.asarray(v[:n], dtype=np.float32) for k, v in raw[theirs].items()}
-    return out
 
 
 def _masked_mean(h: Tensor, mask: Tensor) -> Tensor:
@@ -403,6 +450,7 @@ class VLAEmbedder(nn.Module):
         rename: dict[str, str] = {}
         for step in getattr(self.pre, "steps", []):
             rename.update(getattr(step, "rename_map", {}) or {})
+        rename.update(self.spec.camera_rename)  # applied before the processors (_preprocess, VLARollout)
         inverse = {v: k for k, v in rename.items()}
         self.model_cameras = list(self.policy.config.image_features)
         self.cameras = [inverse.get(k, k) for k in self.model_cameras]
@@ -425,6 +473,10 @@ class VLAEmbedder(nn.Module):
             return int(self.policy.model.qwen.model.config.text_config.hidden_size)
         if self.spec.family == "groot":
             return int(self.policy._groot_model.backbone.model.config.text_config.hidden_size)  # noqa: SLF001
+        if self.spec.family == "evo1":
+            return int(self.policy.model.embedder.model.config.text_config.hidden_size)
+        if self.spec.family == "molmoact2":
+            return int(self.policy._backbone().config.text_config.hidden_size)  # noqa: SLF001
         return int(self.policy.model.paligemma_with_expert.paligemma.config.text_config.hidden_size)
 
     def _device(self) -> torch.device:
@@ -436,6 +488,7 @@ class VLAEmbedder(nn.Module):
             self.pre, _ = vla_processors(self.spec, self.policy.config, str(dev))
             self._pre_device = dev
         keep = {k: v for k, v in batch.items() if k in DATASET_CAMERAS or k in (OBS_STATE, "task")}
+        keep = {self.spec.camera_rename.get(k, k): v for k, v in keep.items()}
         return self.pre(keep)
 
     @torch.no_grad()
@@ -452,6 +505,10 @@ class VLAEmbedder(nn.Module):
             out = self._vla_jepa(b)
         elif self.spec.family == "groot":
             out = self._groot(b)
+        elif self.spec.family == "evo1":
+            out = self._evo1(b)
+        elif self.spec.family == "molmoact2":
+            out = self._molmoact2(b)
         else:  # pi0 shares the PaliGemma prefix path of pi0.5 (its state enters the suffix instead)
             out = self._pi05(b)
         for combo in self.combos:  # multi-layer keys, e.g. "grid2@L12+L15+last"
@@ -717,7 +774,6 @@ class VLAEmbedder(nn.Module):
         res["all"] = {VLA_CAMERA: _masked_mean(h.float(), q["attention_mask"])}
         return res
 
-
     def _groot(self, b: dict[str, Any]) -> dict[str, dict[str, Tensor]]:
         """GR00T N1.7: the Cosmos-Reason2 (Qwen3-VL) backbone over [images, prompt], truncated to the layer its action
         head reads (frozen in LIBERO fine-tuning); ``grid2`` pools that layer's image tokens per view."""
@@ -747,7 +803,9 @@ class VLAEmbedder(nn.Module):
                 v = toks[:, s0 : s0 + gh * gw]
                 s0 += gh * gw
                 fmap = v.transpose(1, 2).reshape(len(v), -1, gh, gw)  # (B, 2*2 cells, D) flattened cell-major
-                res[cam] = torch.nn.functional.adaptive_avg_pool2d(fmap, 2).flatten(2).transpose(1, 2).flatten(1)
+                res[cam] = (
+                    torch.nn.functional.adaptive_avg_pool2d(fmap, 2).flatten(2).transpose(1, 2).flatten(1)
+                )
             return res
 
         res: dict[str, dict[str, Tensor]] = {"grid2": per_view(out["backbone_features"]), "img": {}}
@@ -758,6 +816,120 @@ class VLAEmbedder(nn.Module):
         h, att = out["backbone_features"].float(), out["backbone_attention_mask"]
         res["lang"] = {VLA_CAMERA: _masked_mean(h, att & ~out["image_mask"])}
         res["all"] = {VLA_CAMERA: _masked_mean(h, att)}
+        return res
+
+    def _evo1(self, b: dict[str, Any]) -> dict[str, dict[str, Tensor]]:
+        """Evo-1: InternVL3 (truncated to 14 layers) over [one image per camera, prompt]; its action head reads every
+        token of the last layer's output, which ``grid2`` pools per view (each image: a square grid of tokens)."""
+        pol = self.policy
+        emb = pol.model.embedder
+        images, masks = pol._collect_image_batches(b)  # noqa: SLF001
+        prompts = pol._normalize_task_batch(b)  # noqa: SLF001
+        captured: dict[str, Tensor] = {}
+        hooks = self._hook_layers(emb.model.language_model.layers, captured)
+        ids: list[Tensor] = []
+        hooks.append(
+            emb.model.register_forward_pre_hook(
+                lambda _m, _a, kwargs: ids.append(kwargs["input_ids"]), with_kwargs=True
+            )
+        )
+        try:
+            with torch.autocast(device_type=self._device().type, dtype=torch.bfloat16):
+                h, valid = emb.get_fused_image_text_embedding_batched(
+                    images, masks, prompts, return_cls_only=False
+                )
+        finally:
+            for hk in hooks:
+                hk.remove()
+        n = emb.num_image_token
+        side = int(round(n**0.5))
+        img_pos = (ids[0] == emb.img_context_token_id).nonzero(as_tuple=True)[1].view(len(ids[0]), -1)
+        views = list(pol._camera_keys or sorted(k for k in b if k.startswith(f"{OBS_IMAGES}.")))  # noqa: SLF001
+
+        def per_view(hs: Tensor) -> dict[str, Tensor]:
+            toks = torch.gather(hs.float(), 1, img_pos[..., None].expand(-1, -1, hs.shape[-1]))
+            res = {}
+            for v, model_cam in enumerate(views):
+                cam = (
+                    self.cameras[self.model_cameras.index(model_cam)]
+                    if model_cam in self.model_cameras
+                    else model_cam
+                )
+                if cam in self.present:
+                    fmap = toks[:, v * n : (v + 1) * n].transpose(1, 2).reshape(len(toks), -1, side, side)
+                    res[cam] = (
+                        torch.nn.functional.adaptive_avg_pool2d(fmap, 2).flatten(2).transpose(1, 2).flatten(1)
+                    )
+            return res
+
+        res: dict[str, dict[str, Tensor]] = {"grid2": per_view(h), "img": {}}
+        for tap, ht in captured.items():
+            res[f"grid2@{tap}"] = per_view(ht)
+        for cam, v in res["grid2"].items():
+            res["img"][cam] = v.view(len(v), 4, -1).mean(1)
+        text = valid & (ids[0] != emb.img_context_token_id)
+        res["lang"] = {VLA_CAMERA: _masked_mean(h.float(), text)}
+        res["all"] = {VLA_CAMERA: _masked_mean(h.float(), valid)}
+        return res
+
+    def _molmoact2(self, b: dict[str, Any]) -> dict[str, dict[str, Tensor]]:
+        """MolmoAct2: the Molmo2 decoder over [per camera: a low-res and a high-res grid of image patches, prompt]; its
+        action expert attends to every layer's keys and values. ``grid2`` pools each camera's high-res patch grid
+        (the low-res one if it has none) at the last layer's output."""
+        pol = self.policy
+        backbone = pol._backbone()  # noqa: SLF001
+        inputs = pol._model_inputs(b)  # noqa: SLF001
+        layers = backbone.transformer.blocks
+        captured: dict[str, Tensor] = {}
+        hooks = self._hook_layers(layers, captured)
+        last: list[Tensor] = []
+        hooks.append(
+            layers[-1].register_forward_hook(
+                lambda _m, _i, out: last.append(out[0] if isinstance(out, tuple) else out)
+            )
+        )
+        try:
+            with pol._autocast_context():  # noqa: SLF001
+                backbone(**inputs, use_cache=False)
+        finally:
+            for hk in hooks:
+                hk.remove()
+        ids = inputs["input_ids"]
+        n_rows = len(ids)
+        grids = inputs["image_grids"].reshape(n_rows, -1, 4)  # per camera: low-res h, w, high-res h, w
+        patch_pos = (ids == backbone.config.image_patch_id).nonzero(as_tuple=True)[1].view(n_rows, -1)
+        views = list(pol.config.image_features)  # camera order of the prompt
+
+        def per_view(hs: Tensor) -> dict[str, Tensor]:
+            toks = torch.gather(hs.float(), 1, patch_pos[..., None].expand(-1, -1, hs.shape[-1]))
+            res, s0 = {}, 0
+            for v, model_cam in enumerate(views):
+                rh, rw, hh, hw = (int(x) for x in grids[0, v])
+                low, high = rh * rw, hh * hw
+                gh, gw, start = (hh, hw, s0 + low) if high else (rh, rw, s0)
+                s0 += low + high
+                cam = self.cameras[self.model_cameras.index(model_cam)]
+                if cam in self.present:
+                    fmap = toks[:, start : start + gh * gw].transpose(1, 2).reshape(n_rows, -1, gh, gw)
+                    res[cam] = (
+                        torch.nn.functional.adaptive_avg_pool2d(fmap, 2).flatten(2).transpose(1, 2).flatten(1)
+                    )
+            return res
+
+        res: dict[str, dict[str, Tensor]] = {"grid2": per_view(last[0]), "img": {}}
+        for tap, ht in captured.items():
+            res[f"grid2@{tap}"] = per_view(ht)
+        for cam, v in res["grid2"].items():
+            res["img"][cam] = v.view(len(v), 4, -1).mean(1)
+        mask = (
+            inputs["attention_mask"].bool()
+            if "attention_mask" in inputs
+            else torch.ones_like(ids, dtype=torch.bool)
+        )
+        res["lang"] = {
+            VLA_CAMERA: _masked_mean(last[0].float(), mask & (ids != backbone.config.image_patch_id))
+        }
+        res["all"] = {VLA_CAMERA: _masked_mean(last[0].float(), mask)}
         return res
 
 
@@ -787,13 +959,11 @@ class VLARollout:
     """
 
     def __init__(self, policy, pre, post, n_action_steps: int, record_init_states: set[int] | None = None,
-                 action_transform=None, actions_minus_state: int = 0, camera_rename: dict[str, str] | None = None):  # fmt: skip
+                 action_transform=None, camera_rename: dict[str, str] | None = None):  # fmt: skip
         """``action_transform``: (B, A) -> (B, 7) applied to every predicted action before it is queued (e.g. X-VLA's
-        6D-rotation -> axis-angle LIBERO conversion, which the pool's queue-pop path would otherwise skip).
-        ``actions_minus_state``: the policy predicts its first n action dims minus the (raw) state; add it back."""
+        6D-rotation -> axis-angle LIBERO conversion, which the pool's queue-pop path would otherwise skip)."""
         self.policy, self.pre, self.post = policy, pre, post
         self.action_transform = action_transform
-        self.actions_minus_state = actions_minus_state
         self.camera_rename = camera_rename or {}  # dataset camera key -> the key the policy expects
         self.failed_predictions = 0
         self.n_action_steps = n_action_steps
@@ -866,9 +1036,6 @@ class VLARollout:
                 if torch.is_tensor(v) or k == "task"
             }
             chunk = self._predict(sub)  # (B, C, A) unnormalised
-            if self.actions_minus_state:
-                n = self.actions_minus_state
-                chunk[..., :n] += sub[OBS_STATE][:, None, :n].float().cpu()
             if self.action_transform is not None:
                 b_, c_ = chunk.shape[:2]
                 chunk = self.action_transform(chunk.reshape(b_ * c_, -1)).reshape(b_, c_, -1).float().cpu()

@@ -1,22 +1,24 @@
 # Poster: "Your VLA is Secretly kNN"
 
-A0 landscape workshop poster (LuaLaTeX, tcolorbox `poster` library, Inter + Fira Math).
+A1 portrait workshop poster (594 × 841 mm; LuaLaTeX, tcolorbox `poster` library, Inter + Fira Math).
 
 ```bash
-make          # collect results -> render figures + numbers.tex -> poster.pdf
+make          # collect results -> render figures, tables and numbers.tex -> poster.pdf
 ```
 
-- `scripts/prepare_data.py` gathers every number from the experiment logs (`outputs/knn`, `outputs/vla`)
-  into `data/poster_data.json`.
-- `scripts/make_figures.py` renders `figures/*.pdf` at print size and writes `numbers.tex`. No number in
-  `poster.tex` is typed by hand.
-- Panels whose experiment has not run yet render as hatched "EXPERIMENT RUNNING" boxes, and their numbers
-  render as **running**. They fill in on the next `make` once the data exists:
-  - §4 `head_r2`: `experiments/vla_rollouts.py --record` + `experiments/head_vs_knn.py`
-  - §5 `embedders`: `experiments/compare.py outputs/vla/configs/plain_*.json --tag=vla_plain`
-  - §5 `dose`: the own SmolVLA fine-tune (`scripts/train_smolvla_libero.sh`), writing
-    `outputs/vla/dose_response.json`
+- `scripts/prepare_data.py` gathers every number the poster and the paper use from the experiment results under
+  `outputs/` (`outputs/knn`, `outputs/vla`, `outputs/libero_plus`) into `data/poster_data.json`, and the 2-D maps of
+  every key into `data/embedding_maps.json`. Both are tracked, so the figures can be rebuilt without the (local)
+  result files.
+- `scripts/make_figures.py` renders `figures/*.pdf` (task map, LIBERO-plus per perturbation, VLA-as-lookup, LAC vs
+  closed loop, Optuna, embedding maps before / after fine-tuning), the tables `figures/{results,backbones,ablations}_table.tex`,
+  and `numbers.tex`. No number in `poster.tex` is typed by hand.
+- `knn_diagram.tex` is the TikZ diagram of the kNN policy.
 
-Colour roles are fixed across the poster: orange = kNN (ours), blue = learned models, grey = human demos and
-references, and an ordinal blue ramp = how much robot/LIBERO training the VLM has seen. They were checked with the
-dataviz palette validator.
+The paper uses the same scripts: `KNN_FIG_TARGET=paper` renders the figures at the paper's column width and smaller
+fonts into `paper/figures/` (plus the appendix grids of every key's t-SNE and PCA map) and writes `paper/numbers.tex`;
+`make` in `paper/` does this and runs pdfLaTeX.
+
+Colour roles are fixed across the poster and the paper: orange = kNN (ours), blue = learned models (VLAs), grey =
+human demonstrations and generic encoders, and an ordinal blue ramp = how much robot/LIBERO training a VLM has seen.
+They were checked with the dataviz palette validator.

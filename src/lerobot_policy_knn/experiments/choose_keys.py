@@ -15,7 +15,11 @@ FAMILIES = {  # family label -> (before, after) registry names, or (frozen,)
     "X-VLA": ("xvla_base", "xvla_libero"),
     "π0-FAST": ("pi0fast_base", "pi0fast_libero"),
     "VLA-JEPA": ("vla_jepa_pretrain", "vla_jepa_libero"),
-    "GR00T N1.7": ("groot_base",),  # tune_llm = tune_visual = False: every LIBERO checkpoint keeps the base's VLM
+    "GR00T N1.7": (
+        "groot_base",
+    ),  # tune_llm = tune_visual = False: every LIBERO checkpoint keeps the base's VLM
+    "Evo-1": ("evo1_base", "evo1_libero"),  # before: the raw InternVL3-1B (no Evo-1 checkpoint before LIBERO)
+    "MolmoAct2": ("molmoact2_base", "molmoact2_libero"),
 }
 TEMPLATE = Path("outputs/vla/configs/plain_pi05_base_grid2@L12_z.json")  # the plain lookup's settings
 

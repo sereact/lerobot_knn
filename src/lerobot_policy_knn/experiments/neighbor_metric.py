@@ -52,6 +52,8 @@ SPACES = {
                                      "plain_pi05_libero_grid2@L12+L15+last_pca"),
     "ResNet-18 grid (learnt key)": ("resnet18_l3", "grid4", "file:outputs/vla/learned_key_resnet.pt",
                                    "plain_resnet18_l3_learned"),
+    "π0 base L12": ("vla:pi0_base", "grid2@L12", "zscore", "plain_pi0_base_grid2@L12_z"),
+    "π0 LIBERO L12": ("vla:pi0_libero", "grid2@L12", "zscore", "plain_pi0_libero_grid2@L12_z"),
 }  # fmt: skip
 # keys whose weights never saw LIBERO actions (the learnt key only for held-out queries, see --heldout)
 NEVER_TRAINED_ON_LIBERO = (
@@ -59,6 +61,7 @@ NEVER_TRAINED_ON_LIBERO = (
     "DINOv2",
     "SmolVLA base",
     "π0.5 base",
+    "π0 base",
 )
 
 
@@ -149,10 +152,14 @@ def evaluate(space: str, f, horizon: int = 10, ks=(1, 8), local_m: int = 64, que
     return res
 
 
-def correlate(results: dict, heldout: bool) -> dict:
+def correlate(results: dict, heldout: bool, protocol: str = "full50") -> dict:
+    """``protocol``: "full50" relates to the lookups on the official protocol (initial states 0-49, all 40 tasks) only;
+    "any": the latest run of each key, whatever its episodes."""
     runs = {}
     for line in Path("outputs/knn/compare.jsonl").read_text().splitlines():
         r = json.loads(line)
+        if protocol == "full50" and not (r.get("tag") == "full50" and r.get("init_states") == "0:50"):
+            continue
         runs[Path(r["config_file"]).stem] = 100 * r["success"]
     rows = [(name, m, runs[SPACES[name][3]]) for name, m in results.items() if SPACES[name][3] in runs]
 
@@ -176,6 +183,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--spaces", default=",".join(SPACES))
     parser.add_argument("--correlate", action="store_true")
+    parser.add_argument(
+        "--protocol", default="full50", choices=("full50", "any"), help="which closed-loop runs to relate to"
+    )
     parser.add_argument(
         "--heldout", action="store_true", help="queries from the held-out demos of the split only"
     )
@@ -202,7 +212,7 @@ def main() -> None:
         out_path.write_text(json.dumps({"spaces": results}, indent=1))
     summary = {"spaces": results}
     if args.correlate:
-        summary["correlation"] = correlate(results, args.heldout)
+        summary["correlation"] = correlate(results, args.heldout, args.protocol)
         print(json.dumps({k: v for k, v in summary["correlation"].items() if k != "points"}, indent=1))
     out_path.write_text(json.dumps(summary, indent=1))
 

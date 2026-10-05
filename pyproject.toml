@@ -11,13 +11,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Everything needed to reproduce the LIBERO study: simulator, hyper-parameter search, dashboards.
+# The LIBERO study: simulator, hyper-parameter search and its dashboard, embedding maps.
 experiments = [
     "lerobot[libero]",
     "optuna>=4.5.0,<5.0.0",
     "optuna-dashboard>=0.19.0,<1.0.0",
-    "plotly>=6.0.0,<7.0.0",
-    "kaleido>=1.0.0,<2.0.0",
     "scikit-learn>=1.5.0,<2.0.0",
 ]
 # VLA backbones as retrieval embedders ("Your VLA is secretly kNN"): the core study set, SmolVLA, pi0 / pi0-FAST /
@@ -29,14 +27,13 @@ vla = [
     "lerobot[training]",
     "matplotlib>=3.10.3,<4.0.0",
 ]
-# Further VLA families, each through LeRobot's own extra (multi_task_dit: the diffusion-transformer baseline).
+# Further VLA families, each through LeRobot's own extra.
 vla_jepa = ["lerobot[vla_jepa]"]
 groot = ["lerobot[groot]"]
 molmoact2 = ["lerobot[molmoact2]"]
 evo1 = ["lerobot[evo1]"]
-multi_task_dit = ["lerobot[multi_task_dit]"]
 # The whole study in one environment: uv sync --extra all
-all = ["lerobot_policy_knn[experiments,vla,vla_jepa,groot,molmoact2,evo1,multi_task_dit]"]
+all = ["lerobot_policy_knn[experiments,vla,vla_jepa,groot,molmoact2,evo1]"]
 
 [dependency-groups]
 dev = ["pytest>=8.1.0,<10.0.0", "ruff>=0.14.1"]
@@ -83,4 +80,8 @@ ignore = [
 [tool.ruff.lint.isort]
 combine-as-imports = true
 known-first-party = ["lerobot_policy_knn"]
-known-third-party = ["lerobot"]
+# lerobot gets its own import group, between third-party and first-party imports
+section-order = ["future", "standard-library", "third-party", "lerobot", "first-party", "local-folder"]
+
+[tool.ruff.lint.isort.sections]
+lerobot = ["lerobot"]

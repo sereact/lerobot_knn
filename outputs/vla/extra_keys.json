@@ -59,6 +59,56 @@
    "stem": "plain_vla_jepa_libero_grid2@L7_z",
    "tap": "L7",
    "fair": false
+  },
+  {
+   "name": "groot_base",
+   "label": "GR00T N1.7 frozen VLM grid2@L4",
+   "encoder": "vla:groot_base",
+   "pooling": "grid2@L4",
+   "norm": "zscore",
+   "stem": "plain_groot_base_grid2@L4_z",
+   "tap": "L4",
+   "fair": true
+  },
+  {
+   "name": "evo1_base",
+   "label": "Evo-1 base grid2@L10",
+   "encoder": "vla:evo1_base",
+   "pooling": "grid2@L10",
+   "norm": "zscore",
+   "stem": "plain_evo1_base_grid2@L10_z",
+   "tap": "L10",
+   "fair": true
+  },
+  {
+   "name": "evo1_libero",
+   "label": "Evo-1 LIBERO grid2@L10",
+   "encoder": "vla:evo1_libero",
+   "pooling": "grid2@L10",
+   "norm": "zscore",
+   "stem": "plain_evo1_libero_grid2@L10_z",
+   "tap": "L10",
+   "fair": false
+  },
+  {
+   "name": "molmoact2_base",
+   "label": "MolmoAct2 base grid2@L27",
+   "encoder": "vla:molmoact2_base",
+   "pooling": "grid2@L27",
+   "norm": "zscore",
+   "stem": "plain_molmoact2_base_grid2@L27_z",
+   "tap": "L27",
+   "fair": true
+  },
+  {
+   "name": "molmoact2_libero",
+   "label": "MolmoAct2 LIBERO grid2@L27",
+   "encoder": "vla:molmoact2_libero",
+   "pooling": "grid2@L27",
+   "norm": "zscore",
+   "stem": "plain_molmoact2_libero_grid2@L27_z",
+   "tap": "L27",
+   "fair": false
   }
  ]
 }

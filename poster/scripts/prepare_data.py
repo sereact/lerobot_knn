@@ -1,17 +1,16 @@
-"""Collect every number the poster shows into poster/data/poster_data.json (CPU only).
+"""Collect every number the poster and the paper show into poster/data/poster_data.json (CPU only).
 
-Sources (all produced by lerobot_policy_knn.experiments.*; missing ones are simply left out and the matching
-poster panels render as "pending"):
-
-* outputs/knn/report/data.json   baselines, official kNN / DiT evaluations, ablations (report_data.py)
-* outputs/knn/final.json         robustness re-runs of the official configuration
-* outputs/knn/compare.jsonl      k sweep, and closed-loop kNN runs with VLA embedders (tags vla_*)
-* outputs/knn/memorization.json  diffusion transformer vs kNN, per chunk
-* outputs/vla/results.jsonl      closed-loop success of the VLAs themselves
-* outputs/vla/head_vs_knn_*.json does the VLA head behave like kNN in its own embedding space?
-* outputs/vla/neighbor_metric*.json  do close embeddings have close actions (neighbor_metric.py)
-* outputs/vla/learned_key_resnet.pt  the ResNet key optimised for that (learn_key.py): before / after metrics
-* outputs/libero_plus/results.jsonl  LIBERO-trained policies on the perturbed LIBERO-plus variants
+Inputs, all under outputs/ (written by the experiments in src/lerobot_policy_knn/experiments):
+* knn/eval_official/*/eval_info.json  lerobot-eval runs of the kNN on the official LIBERO protocol
+* knn/compare.jsonl, compare_episodes.jsonl  pool runs of kNN configurations (full50: the official protocol;
+                                             ablations, k sweep, retry)
+* knn/optuna.db                    the hyper-parameter search
+* vla/results_episodes.jsonl       closed-loop LIBERO episodes of the VLAs (full50: the official protocol)
+* vla/head_vs_knn_*.json           does a lookup predict a VLA's action chunks? (head_vs_knn.py)
+* vla/neighbor_metric_heldout.json local action consistency of every key vs its lookup's success (neighbor_metric.py)
+* vla/extra_keys.json              the backbone keys chosen by choose_keys.py
+* vla/embedding_maps.json          2-D maps of every key space (embedding_maps.py), copied to data/embedding_maps.json
+* libero_plus/results*.jsonl, sample.json, head_vs_knn_*.json  the LIBERO-plus runs (libero_plus_eval.py)
 """
 
 import json
@@ -19,68 +18,31 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = next(p for p in Path(__file__).resolve().parents if (p / "outputs").is_dir())  # the root holding outputs/
+ROOT = next(
+    p for p in Path(__file__).resolve().parents if (p / "outputs").is_dir()
+)  # the root holding outputs/
 KNN = ROOT / "outputs/knn"
 VLA = ROOT / "outputs/vla"
+PLUS = ROOT / "outputs/libero_plus"
 OUT = Path(__file__).resolve().parents[1] / "data" / "poster_data.json"
-SUITES = ["libero_spatial", "libero_object", "libero_goal", "libero_10"]
+MAPS_OUT = OUT.with_name("embedding_maps.json")  # the 2-D maps, kept compact in their own file
 
-ABLATION_LABELS = {
-    "no_language": "prompt ignored",
-    "encoder_pixels": "raw 16×16 pixels",
-    "demos_10": "10% of demos",
-    "k1": "k = 1 (replay nearest demo)",
-    "encoder_dinov2": "DINOv2-S instead of ResNet-18",
-    "no_wrist": "agent-view camera only",
-    "demos_25": "25% of demos",
-    "no_agentview": "wrist camera only",
-    "demos_50": "50% of demos",
-    "no_mode": "plain weighted mean",
-    "no_state": "no proprioceptive state",
-    "no_time": "no time-step feature",
-    "hard_filter": "hard task filter",
-    "no_history": "no history matching",
-    "no_ensemble": "no temporal ensembling",
+SUITES = ["libero_spatial", "libero_object", "libero_goal", "libero_10"]
+PER_SUITE = {
+    "groot_libero": {s: f"groot_{s}" for s in SUITES}
+}  # merged name -> its checkpoint for each suite
+OFFICIAL_EVALS = {  # lerobot-eval runs (50 episodes per task, episode j = initial state j): policy id -> run dir
+    "knn:00_base": "knn_v2_39_all50",
+    "knn:full_resnet18_l3_learned": "knn_full_learned_all50",
 }
 
 
 def read_jsonl(path: Path) -> list[dict]:
-    return (
-        [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
-    )
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def real_novelty_motion(horizon: int = 8, per_task: int = 64, seed: int = 0) -> list[float]:
-    """Nearest-other-demonstration distance of real demonstration chunks (motion dims, leave-one-demo-out)."""
-    f = np.load(KNN / "feature_cache/lerobot__libero/frame_index.npz")
-    action, ep_end, task, episode = f["action"], f["episode_end"], f["task_index"], f["episode_index"]
-    idx = np.minimum(np.arange(len(action))[:, None] + np.arange(horizon), ep_end[:, None])
-    rng = np.random.default_rng(seed)
-    out = []
-    for t in np.unique(task):
-        rows = np.nonzero(task == t)[0]
-        cands = action[idx[rows]][..., :6].reshape(len(rows), -1).astype(np.float32)
-        for r in rng.choice(rows, min(per_task, len(rows)), replace=False):
-            q = action[idx[r]][..., :6].reshape(-1).astype(np.float32)
-            d = ((cands - q) ** 2).mean(1)
-            d[episode[rows] == episode[r]] = np.inf
-            out.append(float(d.min()))
-    return out
-
-
-STUDY_VLAS = {  # tag:name of each family's closed-loop run on the shared 400 episodes
-    "pi05_n10:pi05_libero",
-    "smolvla_n10:smolvla_libero",
-    "hub_other_n10:xvla@lerobot/xvla-libero",
-    "hub_other_n10:pi0_fast@lerobot/pi0fast-libero",
-    "hub_other_n10:pi0_libero",
-    "vla_jepa_n7:vla_jepa@lerobot/VLA-JEPA-LIBERO",
-    "evo1:evo1_libero",
-    "molmoact2:molmoact2_libero",
-    "groot_n17:groot_libero",  # merged from its per-suite checkpoints (PER_SUITE)
-}
-PER_SUITE = {"groot_libero": {s: f"groot_{s}" for s in SUITES}}  # merged name -> its checkpoint for each suite
-OVERLAP_LOOKUPS = {"plain": "plain_resnet18_l3", "full": "00_base"}  # the lookup references (config stems)
+def episode_key(r: dict, init_state: int | None = None) -> str:
+    return f"{r['suite']}/{r['task_id']}/{r['init_state'] if init_state is None else init_state}"
 
 
 def merged_name(name: str, suite: str) -> str | None:
@@ -91,217 +53,160 @@ def merged_name(name: str, suite: str) -> str | None:
     return name
 
 
-def merge_per_suite(results: list[dict], episodes: list[dict]) -> list[dict]:
-    """Add one results row per PER_SUITE model whose four checkpoints all ran, computed from their episodes."""
-    out = list(results)
-    for merged, by_suite in PER_SUITE.items():
-        for tag in {r["tag"] for r in episodes if r["name"] in by_suite.values()}:
-            eps = [r for r in episodes if r["tag"] == tag and merged_name(r["name"], r["suite"]) == merged]
-            if {r["suite"] for r in eps} != set(SUITES):
-                continue
-            first = next(r for r in results if r.get("tag") == tag and r.get("name") in by_suite.values())
-            row = {"tag": tag, "name": merged, "init_states": first.get("init_states"),
-                   "n_action_steps": first.get("n_action_steps"), "success": float(np.mean([r["success"] for r in eps]))}  # fmt: skip
-            row.update({s: float(np.mean([r["success"] for r in eps if r["suite"] == s])) for s in SUITES})
-            out.append(row)
-    return out
-
-
-def merge_plus_per_suite(episodes: list[dict]) -> dict[str, dict]:
-    """LIBERO-plus results of each PER_SUITE model whose four checkpoints all ran (each on its own suite's variants)."""
-    out = {}
-    for merged, by_suite in PER_SUITE.items():
-        eps = [r for r in episodes if r.get("tag") == "libero_plus" and r["policy"].startswith("vla:")
-               and merged_name(r["policy"][4:], r["suite"]) == merged and r["policy"][4:] != merged]  # fmt: skip
-        if {r["suite"] for r in eps} != set(SUITES):
-            continue
-        entry: dict = {"n_episodes": len(eps), "all": float(np.mean([r["success"] for r in eps]))}
-        for field, prefix in (("category", "category/"), ("level", "level/"), ("suite", "suite/")):
-            for value in sorted({r[field] for r in eps}, key=str):
-                entry[f"{prefix}{value}"] = float(np.mean([r["success"] for r in eps if r[field] == value]))
-        out[f"vla:{merged}"] = entry
-    return out
-
-
-def episode_overlap(vla_runs: list[dict]) -> dict:
-    """Per VLA run, on the same 400 episodes (initial states 20-29): which episodes it and a training-free lookup
-    solve; and per task, the success of each. Keys of ``episodes``: "suite/task_id/init_state"."""
-    lookups: dict[str, dict[str, bool]] = {k: {} for k in OVERLAP_LOOKUPS}
-    stems = {v: k for k, v in OVERLAP_LOOKUPS.items()}
-    for r in read_jsonl(KNN / "compare_episodes.jsonl"):
-        key = stems.get(Path(r["config_file"]).stem)
-        if key and 20 <= r["init_state"] < 30:
-            lookups[key].setdefault(f"{r['suite']}/{r['task_id']}/{r['init_state']}", r["success"])
-    vlas: dict[str, dict[str, bool]] = {}
+def libero_full() -> dict:
+    """Every policy's per-episode LIBERO success on the official protocol (initial states 0-49, all 40 tasks):
+    lerobot-eval runs of the kNN, and the full50 pool runs of the VLAs ("vla:<name>") and lookups
+    ("knn:<config stem>"). Only complete runs (2,000 episodes) count."""
+    eps: dict[str, dict[str, bool]] = {}
+    for pid, run in OFFICIAL_EVALS.items():
+        for t in json.loads((KNN / "eval_official" / run / "eval_info.json").read_text())["per_task"]:
+            for j, ok in enumerate(t["metrics"]["successes"]):
+                eps.setdefault(pid, {})[f"{t['task_group']}/{t['task_id']}/{j}"] = bool(ok)
     for r in read_jsonl(VLA / "results_episodes.jsonl"):
-        if (name := merged_name(r["name"], r["suite"])) is not None:
-            vlas.setdefault(f"{r['tag']}:{name}", {}).setdefault(
-                f"{r['suite']}/{r['task_id']}/{r['init_state']}", r["success"]
-            )
-    runs = {f"{r['tag']}:{r['name']}" for r in vla_runs}
-    out: dict = {"lookups": {}, "vlas": {}}
-    eps = sorted(lookups["plain"])
-    for name, eps_ok in lookups.items():
-        out["lookups"][name] = {"success": float(np.mean([eps_ok[e] for e in eps])) if eps else None,
-                                "per_task": per_task(eps_ok, eps)}  # fmt: skip
-    for run, eps_ok in vlas.items():
-        if run not in runs or len(eps_ok) < len(eps) or not eps:
+        if r.get("tag") == "full50" and (name := merged_name(r["name"], r["suite"])) is not None:
+            eps.setdefault(f"vla:{name}", {}).setdefault(episode_key(r), r["success"])
+    for r in read_jsonl(KNN / "compare_episodes.jsonl"):
+        if r.get("tag") == "full50":
+            eps.setdefault(f"knn:{Path(r['config_file']).stem}", {}).setdefault(episode_key(r), r["success"])
+    out = {}
+    for pid, e in eps.items():
+        if len(e) < 2000:
             continue
-        entry = {"per_task": per_task(eps_ok, eps)}
-        for name, ref in lookups.items():
-            if len(ref) < len(eps):
-                continue
-            a = np.array([ref[e] for e in eps])
-            b = np.array([eps_ok[e] for e in eps])
-            entry[name] = {"both": int((a & b).sum()), "vla_only": int((b & ~a).sum()),
-                           "lookup_only": int((a & ~b).sum()), "neither": int((~a & ~b).sum())}  # fmt: skip
-        out["vlas"][run] = entry
+        suites = [100 * float(np.mean([v for k, v in e.items() if k.startswith(s + "/")])) for s in SUITES]
+        out[pid] = {"success": 100 * float(np.mean(list(e.values()))), "suites": suites, "episodes": e}
     return out
 
 
-def per_task(eps_ok: dict[str, bool], eps: list[str]) -> dict[str, float]:
-    tasks: dict[str, list[bool]] = {}
-    for e in eps:
-        tasks.setdefault(e.rsplit("/", 1)[0], []).append(eps_ok[e])
-    return {t: float(np.mean(v)) for t, v in sorted(tasks.items())}
+def libero_plus() -> tuple[dict, dict, dict]:
+    """LIBERO-plus success of every policy (overall, per category / level / suite), the control runs (the language
+    variants' scenes with their original instruction), and every policy's per-episode success."""
+    rows = read_jsonl(PLUS / "results.jsonl")
+    results = {r["policy"]: {k: v for k, v in r.items() if k not in ("tag", "policy", "time")}
+               for r in rows if r.get("tag") == "libero_plus"}  # fmt: skip
+    control = {r["policy"]: r["all"] for r in rows if r.get("tag") == "libero_plus_original_instruction"}
+    episodes = [r for r in read_jsonl(PLUS / "results_episodes.jsonl") if r.get("tag") == "libero_plus"]
+    for merged, by_suite in PER_SUITE.items():  # each per-suite checkpoint on its own suite's variants
+        eps = [r for r in episodes if r["policy"].startswith("vla:") and r["policy"][4:] in by_suite.values()
+               and merged_name(r["policy"][4:], r["suite"]) == merged]  # fmt: skip
+        entry: dict = {"n_episodes": len(eps), "all": float(np.mean([r["success"] for r in eps]))}
+        for field in ("category", "level", "suite"):
+            for value in sorted({r[field] for r in eps}, key=str):
+                entry[f"{field}/{value}"] = float(np.mean([r["success"] for r in eps if r[field] == value]))
+        results[f"vla:{merged}"] = entry
+    per_episode: dict[str, dict[str, bool]] = {}
+    for r in episodes:
+        pol = r["policy"]
+        if pol.startswith("vla:"):
+            if (name := merged_name(pol[4:], r["suite"])) is None:
+                continue
+            pol = f"vla:{name}"
+        per_episode.setdefault(pol, {}).setdefault(episode_key(r), r["success"])
+    return results, control, per_episode
+
+
+def plus_variant_task() -> dict[str, str]:
+    """LIBERO-plus variant -> the LIBERO task it perturbs (variant names extend the task name, e.g. "..._tb_22")."""
+    tasks = sorted({r["task"] for r in read_jsonl(VLA / "results_episodes.jsonl")})
+    out = {}
+    for v in json.loads((PLUS / "sample.json").read_text()):
+        flat = v["name"].replace("_", " ")
+        hits = [t for t in tasks if t == v["name"] or t in flat]
+        if hits:
+            out[f"{v['suite']}/{v['task_id']}"] = max(hits, key=len)
+    return out
+
+
+def optuna_summary(study: str = "knn_v2") -> dict:
+    """The trials of the hyper-parameter search behind the final configuration, and fANOVA importances."""
+    import optuna
+
+    optuna.logging.set_verbosity(optuna.logging.WARNING)
+    storage = f"sqlite:///{KNN / 'optuna.db'}"
+
+    def complete(name: str) -> list:
+        return [
+            t
+            for t in optuna.load_study(study_name=name, storage=storage).trials
+            if t.state.name == "COMPLETE"
+        ]
+
+    imp = optuna.importance.get_param_importances(
+        optuna.load_study(study_name=study, storage=storage),
+        evaluator=optuna.importance.FanovaImportanceEvaluator(seed=0),
+    )
+    return {
+        "study": study,
+        "n_trials": len(complete(study)),
+        "n_trials_all_studies": sum(
+            len(complete(s.study_name)) for s in optuna.get_all_study_summaries(storage)
+        ),
+        "importance": {k: float(v) for k, v in imp.items()},
+        "trials": [{"value": t.value, "params": t.params} for t in complete(study)],
+    }
+
+
+def head_vs_knn() -> tuple[dict, dict]:
+    """Per VLA, how well a lookup predicts its action chunks: clean LIBERO rollouts (every key space, references)
+    and LIBERO-plus rollouts (R² at k = 8 per key space)."""
+    clean: dict[str, dict] = {}
+    for path in sorted(
+        VLA.glob("head_vs_knn_*.json")
+    ):  # extra-space files (--no_references) merge into one entry
+        res = json.loads(path.read_text())
+        entry = clean.setdefault(res["vla"], {"spaces": {}})
+        entry["spaces"].update(res["spaces"])
+        if "nearest_training_chunk" in res:
+            entry["nearest_training_chunk"] = res["nearest_training_chunk"]
+    plus = {}
+    for path in sorted(PLUS.glob("head_vs_knn_*.json")):
+        res = json.loads(path.read_text())
+        plus[res["vla"]] = {"vla_success": res.get("vla_success"),
+                            "r2_k8": {sp: v["8"]["vla_r2"] for sp, v in res["spaces"].items() if "8" in v}}  # fmt: skip
+    return clean, plus
 
 
 def main() -> None:
-    data: dict = {}
-    report = json.loads((KNN / "report/data.json").read_text())
-    data["baselines"] = [
-        {"name": b["name"], "suites": b["suites"], "avg": float(np.mean(b["suites"])), "source": b["source"]}
-        for b in report["baselines"]
-    ]
-    final = json.loads((KNN / "final.json").read_text())
-    data["knn_official"] = {
-        "avg": final["average"],
-        "suites": [final["suites"][s]["pc"] for s in SUITES],
-        "ci": [final["suites"][s]["ci"] for s in SUITES],
-        "n": final["n_episodes"],
-        "robustness": final.get("robustness", []),
-    }
-    dit = next((o for o in report["official"] if o["name"] == "dit_60k_all50"), None)
-    if dit:
-        data["dit_ours"] = {"avg": dit["overall"], "suites": [dit["groups"][s]["pc"] for s in SUITES]}
-
-    ablations, base, base_suites = {}, [], []
-    for r in report["compare"]:
-        if r.get("tag") != "ablation":
-            continue
-        key = Path(r["config_file"]).stem
-        if key == "00_base":
-            base.append(100 * r["success"])
-            base_suites.append([100 * r[s] for s in SUITES])
-        elif key in ABLATION_LABELS:
-            ablations[key] = {"label": ABLATION_LABELS[key], "success": 100 * r["success"],
-                              "suites": [100 * r[s] for s in SUITES]}  # fmt: skip
-    data["ablation_base"] = float(np.mean(base))
-    data["ablation_base_suites"] = np.mean(base_suites, axis=0).tolist()
-    data["ablations"] = ablations
-    ksweep = {1: ablations["k1"]["success"]} if "k1" in ablations else {}
-    for r in read_jsonl(KNN / "compare.jsonl"):
-        if r.get("tag") == "k_sweep":
-            ksweep[int(Path(r["config_file"]).stem[1:])] = 100 * r["success"]
-    ksweep[13] = data["ablation_base"]  # the final configuration uses k = 13
-    data["k_sweep"] = dict(sorted(ksweep.items()))
-    data["demo_scaling"] = {
-        pct: ablations[f"demos_{pct}"]["success"] for pct in (10, 25, 50) if f"demos_{pct}" in ablations
-    }
-    data["demo_scaling"][100] = data["ablation_base"]
-
-    mem = json.loads((KNN / "memorization.json").read_text())
-    recs = mem["records"]
-    data["dit_memorization"] = {
-        "n_chunks": len(recs),
-        "dit_to_train": [r["nn_train_motion"] for r in recs],
-        "dit_to_knn": [r["knn_policy_motion"] for r in recs],
-        "knn_spread": [r["knn_neighbour_spread_motion"] for r in recs],
-        "human_to_other_demos": real_novelty_motion(),
-        "gripper_agreement": mem["summary"]["gripper_agreement"],
-    }
-
-    diag = KNN / "diagnose_libero_10.json"
-    if diag.exists():
-        eps = json.loads(diag.read_text())
-        data["failure_diag"] = [{"success": e["success"], "peak_distance": max(e["distance"]), "task": e["task"]}
-                                for e in eps]  # fmt: skip
-
-    # --- VLA experiments (optional until they have run) ---
-    # the study's VLAs: one working LIBERO fine-tune per family (tag:name of its closed-loop run)
-    all_runs = merge_per_suite(read_jsonl(VLA / "results.jsonl"), read_jsonl(VLA / "results_episodes.jsonl"))
-    vla_runs = [r for r in all_runs if f"{r.get('tag')}:{r.get('name')}" in STUDY_VLAS]
-    if vla_runs:
-        data["vla_success"] = {
-            f"{r['tag']}:{r['name']}": {
-                k: r[k]
-                for k in ("name", "tag", "init_states", "n_action_steps", "success", *SUITES)
-                if k in r
-            }
-            for r in vla_runs
-            if not str(r.get("tag", "")).startswith("dose")
-        }
-    learnt = [r for r in read_jsonl(KNN / "compare.jsonl") if r.get("tag") == "learned_key"]
-    if learnt:  # the full method with the learnt ResNet key
-        data["knn_learned_key"] = [
-            {"success": r["success"], "suites": [r.get(s) for s in SUITES]} for r in learnt
-        ]
-    knn_vla = [r for r in read_jsonl(KNN / "compare.jsonl") if str(r.get("tag", "")).startswith("vla")]
-    if knn_vla:
-        data["knn_with_vla_embedders"] = {
+    compare = read_jsonl(KNN / "compare.jsonl")
+    plus, control, plus_episodes = libero_plus()
+    heads, heads_plus = head_vs_knn()
+    data = {
+        "libero_full": libero_full(),
+        "libero_plus": plus,
+        "libero_plus_control": control,
+        "plus_episodes": plus_episodes,
+        "plus_variant_task": plus_variant_task(),
+        # ablations and k sweep of the full method on the official protocol: config stem -> success (%)
+        "ablations_full": {
             Path(r["config_file"]).stem: {
-                "tag": r["tag"],
-                "init_states": r["init_states"],
-                "success": r["success"],
-                "suites": [r.get(s) for s in SUITES],
-            }  # fmt: skip
-            for r in knn_vla
-        }
-    # one entry per analysed VLA; extra-space files (run with --no_references) merge into it
-    heads: dict[str, dict] = {}
-    for path in sorted(VLA.glob("head_vs_knn_*.json")):
-        res = json.loads(path.read_text())
-        entry = heads.setdefault(res["vla"], {"spaces": {}})
-        entry["spaces"].update(res["spaces"])
-        for key in ("horizon", "n_chunks", "vla_success", "noise_floor", "nearest_training_chunk"):
-            if key in res:
-                entry[key] = res[key]
-    if heads:
-        data["head_vs_knn"] = heads
-    quality = [
-        r for r in read_jsonl(VLA / "embed_quality.jsonl") if str(r.get("tag", "")).endswith("_ladder_loeo")
-    ]
-    if quality:
-        data["embed_quality"] = {}
-        for r in quality:
-            data["embed_quality"].setdefault(r["space"], {})[str(r["k"])] = {
-                "r2": r["r2"],
-                "gripper": r["gripper"],
+                "success": 100 * r["success"],
+                "suites": [100 * r[s] for s in SUITES],
             }
-    for name in ("neighbor_metric", "neighbor_metric_heldout"):
-        if (VLA / f"{name}.json").exists():
-            data[name] = json.loads((VLA / f"{name}.json").read_text())
-    if (VLA / "learned_key_resnet.pt").exists():
-        import torch
-
-        learnt = torch.load(VLA / "learned_key_resnet.pt", map_location="cpu", weights_only=True)
-        data["learned_key"] = {"before": learnt["before"], "after": learnt["after"]}
-    rows = read_jsonl(ROOT / "outputs/libero_plus/results.jsonl")
-    # control: the language variants (LIBERO's original scenes) with their original instruction, in the LIBERO-plus env
-    control = {r["policy"]: r["all"] for r in rows if r.get("tag") == "libero_plus_original_instruction"}
-    if control:
-        data["libero_plus_control"] = control
-    plus = [r for r in rows if r.get("tag") == "libero_plus"]
-    if plus:
-        data["libero_plus"] = {r["policy"]: {k: v for k, v in r.items() if k not in ("tag", "policy", "time")}
-                               for r in plus}  # fmt: skip
-        data["libero_plus"].update(merge_plus_per_suite(read_jsonl(ROOT / "outputs/libero_plus/results_episodes.jsonl")))
-
-    data["episode_overlap"] = episode_overlap(vla_runs)
-
+            for r in compare
+            if r.get("tag") in ("full50_ablation", "full50_ksweep") and r.get("init_states") == "0:50"
+        },
+        "retry": {
+            Path(r["config_file"]).stem: r["success"] for r in compare if r.get("tag") == "retry_long2"
+        },
+        "optuna": optuna_summary(),
+        "head_vs_knn": heads,
+        "head_vs_knn_plus": heads_plus,
+        "neighbor_metric": json.loads((VLA / "neighbor_metric_heldout.json").read_text()),
+        "extra_keys": json.loads((VLA / "extra_keys.json").read_text())["keys"],
+    }
+    maps = json.loads((VLA / "embedding_maps.json").read_text())
+    embedding_maps = {  # coordinates at the resolution a figure panel needs
+        "suite": maps["suite"],
+        "progress": [round(v, 2) for v in maps["progress"]],
+        "spaces": {
+            name: {**{k: v for k, v in sp.items() if k not in ("pca", "tsne")},
+                   **{m: [[round(x, 2), round(y, 2)] for x, y in sp[m]] for m in ("pca", "tsne")}}
+            for name, sp in maps["spaces"].items()
+        },
+    }  # fmt: skip
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(data, indent=1))
-    print(f"wrote {OUT} ({', '.join(data)})")
+    MAPS_OUT.write_text(json.dumps(embedding_maps, separators=(",", ":")))
+    print(f"wrote {OUT} ({', '.join(data)}) and {MAPS_OUT}")
 
 
 if __name__ == "__main__":

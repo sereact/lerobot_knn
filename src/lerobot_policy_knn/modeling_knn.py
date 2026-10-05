@@ -22,7 +22,6 @@ from lerobot.utils.constants import ACTION, OBS_STATE
 
 from .configuration_knn import KNNConfig
 from .encoders import ImageEncoder, TextEncoder, finalize_features
-from .transforms import apply_query_transform
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +155,6 @@ class KNNPolicy(PreTrainedPolicy):
         self._task_lookup: dict[str, int] = {name: i for i, name in enumerate(config.task_names)}
         self._retrieval_index: dict[str, Tensor] = {}  # built lazily by _index()
         self._slots: dict[int, _EnvSlot] = {}
-        # Debugging aid: when set to a list, every retrieval appends (query, task ids, t, rows, distances).
-        self.query_log: list[dict[str, Any]] | None = None
 
     # ------------------------------------------------------------------ plumbing
     @property
@@ -264,13 +261,6 @@ class KNNPolicy(PreTrainedPolicy):
         cameras = cfg.active_cameras
         if cameras and cfg.image_encoder.startswith("vla:"):
             # a VLA embeds all cameras, the prompt and the state jointly (see vla.py)
-            if cfg.query_transform and cfg.query_transform != "none":
-                batch = dict(batch)
-                for cam in cameras:
-                    if cam in batch:
-                        img = batch[cam]
-                        img = img.float() / 255.0 if img.dtype == torch.uint8 else img
-                        batch[cam] = apply_query_transform(img.to(self.device), cfg.query_transform)
             pooled = self.image_encoder()(batch)[cfg.image_pooling]
             for cam in cameras:
                 name = camera_key_name(cam)
@@ -281,8 +271,7 @@ class KNNPolicy(PreTrainedPolicy):
                 img = batch[cam]
                 if img.dtype == torch.uint8:
                     img = img.float() / 255.0
-                img = apply_query_transform(img.to(self.device, non_blocking=True), cfg.query_transform)
-                images.append(img)
+                images.append(img.to(self.device, non_blocking=True))
             # test-time augmentation: embed shifted copies and average their unit-norm keys; every camera and
             # view goes through the backbone in one batch when the resolutions agree
             views = _tta_offsets(cfg.query_tta, cfg.query_tta_px)
@@ -641,16 +630,6 @@ class KNNPolicy(PreTrainedPolicy):
             obs_top1 = dists[:, 0] - (history.gather(1, rows[:, :1])[:, 0] if history is not None else 0.0)
             for slot, nd in zip(slots, (obs_top1 / scale).tolist(), strict=True):
                 slot.unseen_streak = slot.unseen_streak + 1 if nd > cfg.retry_distance_threshold else 0
-        if self.query_log is not None:
-            self.query_log.append(
-                {
-                    "query": {k: v.detach().cpu() for k, v in query.items()},
-                    "task": None if task_ids is None else task_ids.cpu(),
-                    "t": t.cpu(),
-                    "rows": rows.cpu(),
-                    "dists": dists.cpu(),
-                }
-            )
         if slots is not None and self.config.history_weight > 0:
             for r, slot in enumerate(slots):
                 slot.prev_query = {name: v[r] for name, v in query.items()}

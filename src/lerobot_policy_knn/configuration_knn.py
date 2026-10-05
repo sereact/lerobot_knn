@@ -44,9 +44,6 @@ class KNNConfig(PreTrainedConfig):
     state_axis_angle_start: int | None = 3
     # Weight of |t_query - t_memory|, t being the step index since the start of the episode.
     time_weight: float = 0.0
-    # Transform applied to live camera images before embedding them, to imitate the dataset's video
-    # compression (see lerobot_policy_knn.transforms): "none", "yuv420", "av1", "blur:0.5", ...
-    query_transform: str = "none"
     # "zscore": standardise every raw key dimension with memory statistics before the unit-norm (cosine) step.
     # VLM hidden states put most of their energy in a handful of "massive activation" channels, which otherwise
     # dominate the cosine distance.

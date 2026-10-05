@@ -14,7 +14,7 @@ plus two reference scales: the VLA's own resampling noise (a second flow-matchin
 observation) and how close the VLA's chunks come to *any* training chunk of the task.
 
     uv run python -m lerobot_policy_knn.experiments.head_vs_knn outputs/vla/rollouts/vla_smolvla_libero.npz \\
-        --vla=smolvla_libero --spaces=dinov2,resnet18_l3,vla:smolvlm2/img,vla:smolvla_base/img,vla:smolvla_libero/img
+        --vla=smolvla_libero --spaces=dinov2,resnet18_l3,vla:smolvla_base/grid2,vla:smolvla_libero/grid2
 """
 
 import argparse
@@ -28,7 +28,7 @@ from lerobot.utils.constants import OBS_STATE
 
 from ..configuration_knn import KNNConfig
 from ..modeling_knn import camera_key_name
-from ..vla import DATASET_CAMERAS, VLA_CAMERA, cache_tag, load_vla
+from ..vla import DATASET_CAMERAS, VLA_CAMERA, cache_tag, load_vla, resolve_spec
 from .search import MemoryFactory
 
 MOTION = slice(0, 6)
@@ -100,9 +100,12 @@ def retrieve_chunks(policy, query: dict, t: torch.Tensor, task: torch.Tensor, ho
 
 @torch.no_grad()
 def embed_records(policy, rec: dict, batch: int = 48) -> dict[str, torch.Tensor]:
+    """Keys of recorded observations; the batch halves whenever an embedder runs out of GPU memory (e.g. Evo-1's eager
+    attention at 448 px)."""
     out: dict[str, list[torch.Tensor]] = {}
     n = len(rec["state"])
-    for s in range(0, n, batch):
+    s = 0
+    while s < n:
         sl = slice(s, min(n, s + batch))
         b = {
             cam: torch.from_numpy(rec["images"][sl, i]).cuda().float() / 255.0
@@ -110,8 +113,17 @@ def embed_records(policy, rec: dict, batch: int = 48) -> dict[str, torch.Tensor]
         }
         b[OBS_STATE] = torch.from_numpy(rec["state"][sl]).float().cuda()
         b["task"] = [str(rec["task_names"][i]) for i in rec["task"][sl]]
-        for key, v in policy.encode_observation(b).items():
+        try:
+            keys = policy.encode_observation(b)
+        except torch.OutOfMemoryError:
+            if batch == 1:
+                raise
+            batch = max(1, batch // 2)
+            torch.cuda.empty_cache()
+            continue
+        for key, v in keys.items():
             out.setdefault(key, []).append(v)
+        s = sl.stop
     return {k: torch.cat(v) for k, v in out.items()}
 
 
@@ -141,11 +153,16 @@ def main() -> None:
     parser.add_argument(
         "--no_references", action="store_true", help="skip the VLA noise floor / nearest-chunk refs"
     )
+    parser.add_argument(
+        "--no_noise_floor", action="store_true", help="skip only the noise floor (it re-runs the VLA itself)"
+    )
     args = parser.parse_args()
     horizon = args.horizon
     ks = [int(k) for k in args.ks.split(",")]
     data = np.load(args.rollouts)
     rec = {k: data[k] for k in data.files}
+    # a VLA re-planning every n < horizon steps (VLA-JEPA: 7) recorded n-step chunks: compare that many actions
+    horizon = min(horizon, int(rec["chunk"].shape[1]))
     # rollout prompts -> memory task ids
     factory = MemoryFactory()
     frames = factory.frames
@@ -213,23 +230,42 @@ def main() -> None:
         out.write_text(json.dumps(result, indent=1))
         print("->", out)
         return
-    # reference 1: the VLA's own sampling noise at the recorded observations
-    policy, pre, post = load_vla(args.vla)
-    resampled = []
-    for s in range(0, len(y_vla), 32):
-        sl = slice(s, s + 32)
-        b = {
-            cam: torch.from_numpy(rec["images"][sl, i]).float() / 255.0
-            for i, cam in enumerate(DATASET_CAMERAS)
+    if not args.no_noise_floor:  # reference 1: the VLA's own sampling noise at the recorded observations
+        policy, pre, post = load_vla(args.vla)
+        rename = resolve_spec(args.vla).camera_rename
+
+        def predict(b):
+            policy.reset()
+            return post(policy.predict_action_chunk(pre(b))).float().cpu().numpy()[:, :horizon]
+
+        resampled = []
+        for s in range(0, len(y_vla), 32):
+            sl = slice(s, s + 32)
+            b = {
+                rename.get(cam, cam): torch.from_numpy(rec["images"][sl, i]).float() / 255.0
+                for i, cam in enumerate(DATASET_CAMERAS)
+            }
+            b[OBS_STATE] = torch.from_numpy(rec["state"][sl]).float()
+            b["task"] = [str(rec["task_names"][i]) for i in rec["task"][sl]]
+            try:
+                resampled.append(predict(b))
+            except Exception:  # noqa: BLE001 - e.g. an invalid FAST token sequence: row by row, failures as NaN
+                rows = []
+                for j in range(len(b["task"])):
+                    one = {k: (v[j : j + 1] if torch.is_tensor(v) else [v[j]]) for k, v in b.items()}
+                    try:
+                        rows.append(predict(one))
+                    except Exception:  # noqa: BLE001
+                        rows.append(np.full((1, horizon, y_vla.shape[-1]), np.nan, dtype=np.float32))
+                resampled.append(np.concatenate(rows))
+        y2 = np.concatenate(resampled)
+        ok = ~np.isnan(y2).any(axis=(1, 2))
+        result["noise_floor"] = {
+            f"vla_{a}": b for a, b in chunk_metrics(y_vla[ok], y2[ok], y2[ok], rec_task[ok]).items()
         }
-        b[OBS_STATE] = torch.from_numpy(rec["state"][sl]).float()
-        b["task"] = [str(rec["task_names"][i]) for i in rec["task"][sl]]
-        policy.reset()
-        resampled.append(post(policy.predict_action_chunk(pre(b))).float().cpu().numpy()[:, :horizon])
-    y2 = np.concatenate(resampled)
-    result["noise_floor"] = {f"vla_{a}": b for a, b in chunk_metrics(y_vla, y2, y2, rec_task).items()}
-    del policy
-    torch.cuda.empty_cache()
+        result["noise_floor"]["rows_failed"] = int((~ok).sum())
+        del policy
+        torch.cuda.empty_cache()
 
     # reference 2: nearest training chunk of the same task (does the VLA output something it has seen?)
     mem_rows = np.nonzero(frames.frame_index % 2 == 0)[0]
@@ -253,7 +289,9 @@ def main() -> None:
         "demo_median": float(np.median(nn_demo)),
     }
     result["per_record_nearest_training_chunk"] = nn_vla
-    print("noise floor", result["noise_floor"], "\nnearest training chunk", result["nearest_training_chunk"])
+    print(
+        "noise floor", result.get("noise_floor"), "\nnearest training chunk", result["nearest_training_chunk"]
+    )
     out.write_text(json.dumps(result, indent=1))
     print("->", out)
 
