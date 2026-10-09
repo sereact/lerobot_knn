@@ -7,6 +7,7 @@ generic encoders = grey, and a VLM's LIBERO training (before / after fine-tuning
 
 import json
 import os
+import re
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -294,6 +295,80 @@ def fig_vla_lookup() -> None:
     a.set_yticks(y, [r[0] for r in rows])
     a.set_ylim(-0.6, len(rows) - 0.1)
     save(fig, "vla_lookup")
+
+
+def double_fig_vla_lookup() -> None:
+    """Are VLAs secretly kNN? A lookup over the demos predicts their action chunks, and their chunks sit closer to the
+    training data than a new human demonstration does."""
+    rows = lookup_rows()
+    y = np.arange(len(rows))[::-1]
+    labels = [f"{r[0]}" for r in rows]
+    labels = [re.sub(r"π([\d.]+)", r"$\\pi_{\1}$", lab).replace("†", r"$^\dagger$") for lab in labels]
+
+    human = float(np.mean([r[2] for r in rows]))
+
+    # Identical dimensions for both figures
+    FIGSIZE = (3.4, 0.85 + 0.27 * len(rows))
+
+    # --------------------------------------------------
+    # (a) Lookup prediction R²
+    # --------------------------------------------------
+    with plt.style.context("poster/scripts/figure.mplstyle"):
+        fig, ax = plt.subplots(figsize=FIGSIZE, layout="constrained")
+        for yi, (_lab, r2, _d, ratio) in zip(y, rows, strict=True):
+            ax.barh(yi, r2, color=LEARNED, height=0.62, edgecolor="white")
+            ax.text(r2 + 0.02, yi, f"{r2:.2f}", va="center", fontsize=FS_SMALL - 2.5, color=INK)
+
+        ax.axvline(human, color=KNN, linestyle=(0, (4, 3)), linewidth=1.6)
+        ax.text(
+            human - 0.01,
+            len(rows) - 0.45,
+            "Ground-truth actions",
+            ha="right",
+            va="bottom",
+            fontsize=FS_SMALL - 2.5,
+            color=KNN,
+        )
+        ax.set_xlim(0, 1.12)
+        ax.set_ylim(-0.6, len(rows) - 0.1)
+        ax.set_yticks(y, labels)
+        ax.set_xlabel(
+            "$R^2$ of a lookup's prediction",
+            fontsize=FS_SMALL - 1,
+        )
+        hbar_axes(ax)
+        ax.tick_params(axis="x", labelsize=FS_SMALL - 2.5)
+
+        save(fig, "vla_lookup_r2")
+
+    # --------------------------------------------------
+    # (b) Distance to nearest training chunk
+    # --------------------------------------------------
+    with plt.style.context("poster/scripts/figure.mplstyle"):
+        fig, ax = plt.subplots(figsize=FIGSIZE, layout="constrained")
+        for yi, (_lab, r2, _d, ratio) in zip(y, rows, strict=True):
+            ax.barh(yi, ratio, color=LEARNED, height=0.62, edgecolor="white")
+            ax.text(ratio + 0.02, yi, f"{ratio:.2f}", va="center", fontsize=FS_SMALL - 2.5, color=INK)
+
+        ax.axvline(1.0, color=KNN, linestyle=(0, (4, 3)), linewidth=1.6)
+        ax.text(
+            0.99,
+            len(rows) - 0.45,
+            "Ground-truth actions",
+            ha="right",
+            va="bottom",
+            fontsize=FS_SMALL - 2.5,
+            color=KNN,
+        )
+
+        ax.set_xlim(0, 1.35)
+        ax.set_ylim(-0.6, len(rows) - 0.1)
+        ax.set_yticks(y, labels)
+        ax.set_xlabel("Distance to nearest training chunk\nrelative to ground-truth", fontsize=FS_SMALL - 1)
+        hbar_axes(ax)
+        ax.tick_params(axis="x", labelsize=FS_SMALL - 2.5)
+
+        save(fig, "vla_lookup_distance")
 
 
 def key_stem(name: str) -> str:
@@ -766,6 +841,7 @@ if __name__ == "__main__":
     fig_task_map()
     fig_libero_plus()
     fig_vla_lookup()
+    double_fig_vla_lookup()
     fig_neighbors()
     fig_optuna()
     fig_embedding_pairs()
