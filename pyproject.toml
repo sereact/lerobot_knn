@@ -5,10 +5,7 @@ description = "Non-parametric k-nearest-neighbour action-chunk retrieval policy 
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "Apache-2.0" }
-dependencies = [
-    "lerobot[dataset]",
-    "transformers>=5.4.0,<6.0.0",
-]
+dependencies = ["lerobot[dataset]", "transformers>=5.4.0,<6.0.0"]
 
 [project.optional-dependencies]
 # The LIBERO study: simulator, hyper-parameter search and its dashboard, embedding maps.
@@ -32,6 +29,7 @@ vla_jepa = ["lerobot[vla_jepa]"]
 groot = ["lerobot[groot]"]
 molmoact2 = ["lerobot[molmoact2]"]
 evo1 = ["lerobot[evo1]"]
+figures = ["tqdm", "matplotlib"]
 # The whole study in one environment: uv sync --extra all
 all = ["lerobot_policy_knn[experiments,vla,vla_jepa,groot,molmoact2,evo1]"]
 
@@ -81,7 +79,14 @@ ignore = [
 combine-as-imports = true
 known-first-party = ["lerobot_policy_knn"]
 # lerobot gets its own import group, between third-party and first-party imports
-section-order = ["future", "standard-library", "third-party", "lerobot", "first-party", "local-folder"]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "lerobot",
+    "first-party",
+    "local-folder",
+]
 
 [tool.ruff.lint.isort.sections]
 lerobot = ["lerobot"]
