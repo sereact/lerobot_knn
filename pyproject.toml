@@ -29,7 +29,11 @@ vla_jepa = ["lerobot[vla_jepa]"]
 groot = ["lerobot[groot]"]
 molmoact2 = ["lerobot[molmoact2]"]
 evo1 = ["lerobot[evo1]"]
-figures = ["tqdm", "matplotlib"]
+figures = [
+    "tqdm",
+    "matplotlib",
+    "ipykernel>=7.4.0",
+]
 # The whole study in one environment: uv sync --extra all
 all = ["lerobot_policy_knn[experiments,vla,vla_jepa,groot,molmoact2,evo1]"]
 
