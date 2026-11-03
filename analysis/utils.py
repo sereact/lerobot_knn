@@ -29,9 +29,9 @@ SUITES = ["libero_spatial", "libero_object", "libero_goal", "libero_10"]
 
 # ---- the policies compared, and their results ---------------------------------------------------------------
 POLICIES = [  # label, role, LIBERO id in libero_full (official protocol, 2,000 episodes), LIBERO-plus spec
-    ("kNN, full method", "knn", "knn:00_base", "knn:outputs/knn/v2_39.json"),
-    ("kNN, + learnt key", "knn", "knn:full_resnet18_l3_learned", "knn:outputs/vla/configs/full_resnet18_l3_learned.json"),
-    ("kNN, plain", "knn2", "knn:plain_resnet18_l3", "knn:outputs/vla/configs/plain_resnet18_l3.json"),
+    ("k-NN (multimodal)", "knn", "knn:00_base", "knn:outputs/knn/v2_39.json"),
+    ("k-NN (LAC key)", "knn", "knn:full_resnet18_l3_learned", "knn:outputs/vla/configs/full_resnet18_l3_learned.json"),
+    ("k-NN (ResNet)", "knn2", "knn:plain_resnet18_l3", "knn:outputs/vla/configs/plain_resnet18_l3.json"),
     ("π0.5", "vla", "vla:pi05_libero", "vla:pi05_libero"),
     ("MolmoAct2", "vla", "vla:molmoact2_libero", "vla:molmoact2_libero"),
     ("VLA-JEPA", "vla", "vla:vla_jepa@lerobot/VLA-JEPA-LIBERO", "vla:vla_jepa@lerobot/VLA-JEPA-LIBERO"),
@@ -84,29 +84,6 @@ def task_matrix(data: dict, bench: str) -> tuple[list[str], np.ndarray]:
     tasks = sorted(set().union(*mats))
     m = np.array([[mt[t] for t in tasks] for mt in mats])
     return rows, m[:, np.argsort(-m.mean(axis=0), kind="stable")]
-
-
-def failure_overlap(data: dict, bench: str) -> list[tuple[str, float, float]]:
-    """Per VLA: P(the kNN fails an episode | the VLA fails it), and the kNN's overall failure rate."""
-    ref = episodes(data, bench, *POLICIES[0][2:])
-    out = []
-    for lab, role, run, spec in ranked_policies(data):
-        if role != "vla":
-            continue
-        e = episodes(data, bench, run, spec)
-        keys = sorted(set(e) & set(ref))
-        a, b = np.array([ref[k] for k in keys]), np.array([e[k] for k in keys])
-        if (~b).sum():
-            out.append((lab, float((~a & ~b).sum() / (~b).sum()), float((~a).mean())))
-    return out
-
-
-def task_corr(data: dict, bench: str) -> list[float]:
-    """Pearson correlation of per-task success between the kNN (full method) and each VLA."""
-    rows, m = task_matrix(data, bench)
-    i = rows.index("kNN, full method")
-    roles = {lab: role for lab, role, _r, _s in POLICIES}
-    return [float(np.corrcoef(m[i], m[j])[0, 1]) for j, lab in enumerate(rows) if roles[lab] == "vla"]
 
 
 PLUS_CATEGORIES = [("Camera Viewpoints", "Camera"), ("Robot Initial States", "Robot"), ("Language Instructions", "Language"),
@@ -167,11 +144,6 @@ def backbone_rows(data: dict) -> list[tuple]:
     return sorted(out, key=lambda r: (-r[3][1], -r[3][0]))  # as the results table
 
 
-NEIGHBOR_KEYS = {  # one key per backbone (the recipe variants of π0.5 / SmolVLA are left out): point -> colour role
-    "ResNet-18 grid": "generic", "DINOv2-S": "generic", "ResNet-18 grid (learnt key)": "learnt",
-    "SmolVLA base grid": "before", "SmolVLA LIBERO grid": "after", "π0.5 base L12": "before", "π0.5 LIBERO L12": "after",
-    "π0 base L12": "before", "π0 LIBERO L12": "after",
-}  # fmt: skip
 
 
 def suite_r2(maps: dict, space: str) -> float:
