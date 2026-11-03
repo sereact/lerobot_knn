@@ -14,9 +14,6 @@ import numpy as np
 class Colour(StrEnum):
     """The palette of every figure (a str: usable as any matplotlib colour)."""
 
-    INK = "#0b0b0b"
-    INK2 = "#52514e"
-    MUTED = "#898781"
     GRID = "#e1e0d9"
     AXIS = "#c3c2b7"
     KNN = "#eb6834"  # kNN (ours)
@@ -26,9 +23,6 @@ class Colour(StrEnum):
     BEFORE = "#86b6ef"  # a VLM before / after its LIBERO fine-tuning (validated ordinal pair)
     AFTER = "#1c5cab"
 
-
-W = 5.5  # inches: the CoRL template's text width
-FS, FS_SMALL, FS_TINY = 10, 9, 7  # pt: \normalsize, \small, \scriptsize of the paper (as figure.mplstyle)
 
 SUITES = ["libero_spatial", "libero_object", "libero_goal", "libero_10"]
 

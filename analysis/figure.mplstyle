@@ -13,12 +13,7 @@ xtick.labelsize: 9
 ytick.labelsize: 9
 legend.fontsize: 9
 
-# colours: utils.Colour (INK, INK2, MUTED, GRID, AXIS), without the "#" that starts a comment here
-text.color: 0b0b0b
-axes.labelcolor: 52514e
-axes.edgecolor: c3c2b7
-xtick.color: 898781
-ytick.color: 898781
+# colours: utils.Colour.GRID, without the "#" that starts a comment here; text and axes stay black, as in the paper
 grid.color: e1e0d9
 
 axes.spines.top: False
