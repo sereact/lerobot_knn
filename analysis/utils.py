@@ -100,9 +100,11 @@ LOOKUP_VLAS = [  # label, head_vs_knn "vla" name of its clean LIBERO recording (
 
 def lookup_rows(data: dict) -> list[tuple]:
     """Per VLA (clean LIBERO rollouts, ResNet-18 key, k = 8): R² of the lookup's prediction of the VLA's chunks and of
-    held-out human chunks, and the VLA's distance to the nearest training chunk relative to a human demo's."""
+    held-out human chunks, and the VLA's distance to the nearest training chunk relative to a human demo's. Ordered as
+    ranked_policies, like every table and map."""
+    rank = [lab for lab, *_ in ranked_policies(data)]
     out = []
-    for label, name in LOOKUP_VLAS:
+    for label, name in sorted(LOOKUP_VLAS, key=lambda v: rank.index(v[0].rstrip("†"))):
         h = data["head_vs_knn"][name]
         sp, nn = h["spaces"]["resnet18_l3"]["8"], h["nearest_training_chunk"]
         out.append((label, sp["vla_r2"], sp["demo_r2"], nn["vla_median"] / nn["demo_median"]))
