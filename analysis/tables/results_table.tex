@@ -1,0 +1,70 @@
+\begin{table}[t!]
+\centering
+\caption{Success rate (\unit{\percent}) on LIBERO (official protocol, 2{,}000 episodes) and on the same LIBERO-Plus variants, ordered by LIBERO-Plus. The \ac{kNN} rows are training-free, except for the \ac{LAC} key.}\label{tab:results}
+\scriptsize
+\setlength{\tabcolsep}{5pt}
+\resizebox{\linewidth}{!}{%
+  \begin{tabular}{@{}l*{5}{r}@{\hspace{1.5mm}}*{5}{r}@{\hspace{1.5mm}}r@{}}
+  \toprule
+  & \multicolumn{5}{c}{LIBERO}
+  & \multicolumn{5}{c}{LIBERO-Plus}
+  & \\
+  \cmidrule(lr){2-6}\cmidrule(lr){7-11}
+  & avg & Spat & Obj & Goal & Long
+  & avg & Spat & Obj & Goal & Long & $\Delta$ \\
+  \midrule
+
+  $\pi_{0.5}$~\citep{pi2025pi05}
+  & \textbf{97.7} & 97.0 & 99.8 & \textbf{97.8} & \textbf{96.2}
+  & \textbf{85.5} & \textbf{90.5} & 83.8 & 82.9 & \textbf{84.8} & -12.2 \\
+
+  MolmoAct2~\citep{fang2026molmoact2}
+  & 97.5 & \textbf{97.4} & 99.4 & 97.6 & 95.6
+  & 82.6 & 89.5 & 81.9 & 76.2 & 82.9 & -14.9 \\
+
+  GR00T N1.7~\citep{nvidia2025gr00t}
+  & 94.9 & 95.8 & 98.2 & 94.6 & 90.8
+  & 80.2 & 89.5 & 74.3 & 79.0 & 78.1 & -14.6 \\
+
+  VLA-JEPA~\citep{sun2026vlajepa}
+  & 97.2 & 95.4 & \textbf{100.0} & 97.4 & 95.8
+  & 74.0 & 81.0 & 70.5 & 77.1 & 67.6 & -23.1 \\
+
+  Evo-1~\citep{lin2026evo1}
+  & 95.4 & 92.0 & 98.6 & 97.4 & 93.6
+  & 71.4 & 74.3 & 73.3 & 69.5 & 68.6 & -24.0 \\
+
+  X-VLA~\citep{zheng2026xvla}
+  & 94.5 & 94.6 & 98.6 & 92.6 & 92.2
+  & 64.5 & 71.4 & 64.8 & 64.8 & 57.1 & -30.0 \\
+
+  $\pi_0$~\citep{black2024pi0}
+  & 71.9 & 70.0 & 86.4 & 85.8 & 45.2
+  & 42.9 & 54.3 & 41.9 & 46.7 & 28.6 & -29.0 \\
+
+  SmolVLA~\citep{shukor2025smolvla}
+  & 82.2 & 78.8 & 92.2 & 88.0 & 69.6
+  & 27.9 & 30.5 & 49.5 & 11.4 & 20.0 & -54.3 \\
+
+  $\pi_0$-FAST~\citep{pertsch2025fast}
+  & 90.6 & 90.4 & 93.8 & 90.6 & 87.4
+  & 25.7 & 39.0 & 34.3 & 16.2 & 13.3 & -64.8 \\
+
+  \midrule
+
+  \rowcolor{tint}\knnword{} (ResNet)
+  & 88.7 & 90.4 & 95.0 & 95.2 & 74.2
+  & 75.5 & 77.1 & 81.9 & 79.0 & 63.8 & -13.2 \\
+
+  \rowcolor{tint}\knnword{} (multimodal)
+  & 91.7 & 88.0 & 99.8 & 97.6 & 81.4
+  & 82.4 & 79.0 & \textbf{85.7} & \textbf{86.7} & 78.1 & \textbf{-9.3} \\
+
+  \rowcolor{tint}\knnword{} (LAC key)
+  & 93.0 & 90.6 & 99.6 & 97.0 & 84.8
+  & 81.7 & 87.6 & 83.8 & 81.0 & 74.3 & -11.3 \\
+
+  \bottomrule
+  \end{tabular}%
+}
+\end{table}
