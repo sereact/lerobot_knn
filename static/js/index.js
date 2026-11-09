@@ -157,7 +157,7 @@ function renderBenchmarkChart() {
             rowClass: (d.knn ? 'is-knn' : 'is-vla') + (d.best ? ' is-best' : ''),
             line: [d.plus, d.libero],
             marks: [{ cls: 'is-filled', value: d.plus }, { cls: 'is-ring', value: d.libero }],
-            delta: '−' + drop,
+            delta: '−' + drop + ' %pt',
             label: d.name + ': LIBERO ' + d.libero + ' %, LIBERO-Plus ' + d.plus + ' %, difference ' + drop + ' percentage points',
             tipLead: d.libero + ' % → ' + d.plus + ' %',
             tipSub: d.name + ' · Δ −' + drop + ' %pt',
@@ -197,7 +197,29 @@ function renderBackboneChart(benchmark) {
     });
 }
 
+// Pipeline figure: hovering (or tapping) one path grays out the other
+function setupPipeline() {
+    const canvas = document.getElementById('pipeline');
+    if (!canvas) return;
+    const canHover = window.matchMedia('(hover: hover)').matches;
+    function focusPath(path) {
+        canvas.classList.toggle('focus-knn', path === 'knn');
+        canvas.classList.toggle('focus-vla', path === 'vla');
+    }
+    canvas.querySelectorAll('.path-zone:not(.is-part)').forEach(function(zone) {
+        const path = zone.dataset.path;
+        zone.addEventListener('pointerenter', function() { if (canHover) focusPath(path); });
+        zone.addEventListener('pointerleave', function() { if (canHover) focusPath(null); });
+        zone.addEventListener('focus', function() { focusPath(path); });
+        zone.addEventListener('blur', function() { focusPath(null); });
+        zone.addEventListener('click', function() {
+            if (!canHover) focusPath(canvas.classList.contains('focus-' + path) ? null : path);
+        });
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+    setupPipeline();
     renderBenchmarkChart();
     renderBackboneChart('plus');
     document.querySelectorAll('#backbone-chart .chart-toggle button').forEach(function(button) {

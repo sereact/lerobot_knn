@@ -365,6 +365,12 @@
   transform: translateX(-50%);
 }
 
+#benchmark-chart .db-head,
+#benchmark-chart .db-row,
+#benchmark-chart .db-axis {
+  grid-template-columns: 9.5rem 1fr 5rem;
+}
+
 .db-tooltip {
   position: absolute;
   z-index: 5;
@@ -488,6 +494,68 @@
 /* Call to action */
 .cta .lead {
   margin-bottom: 1.25rem;
+}
+
+/* Method section */
+.subsection-title {
+  font-size: 1.35rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 3rem 0 0.5rem;
+}
+
+.section-text {
+  font-size: 1.05rem;
+  line-height: 1.65;
+  color: var(--text-secondary);
+}
+
+/* Interactive pipeline figure: the zones sit over paths (a) and (b) */
+.pipeline-frame {
+  background: #fff;
+  border-radius: 8px;
+  padding: 0.5rem;
+}
+
+.pipeline-canvas {
+  position: relative;
+  line-height: 0;
+}
+
+.paper-figure .pipeline-canvas img {
+  padding: 0;
+  border-radius: 0;
+}
+
+.path-zone {
+  position: absolute;
+  border-radius: 8px;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease, backdrop-filter 0.2s ease;
+  outline: none;
+}
+
+.path-zone:not(.is-part) {
+  cursor: pointer;
+}
+
+.path-zone.is-part {
+  pointer-events: none;
+  border-radius: 2px;
+}
+
+.pipeline-canvas.focus-knn .path-zone[data-path="vla"],
+.pipeline-canvas.focus-vla .path-zone[data-path="knn"] {
+  background-color: rgba(255, 255, 255, 0.72);
+  -webkit-backdrop-filter: grayscale(1);
+  backdrop-filter: grayscale(1);
+}
+
+.pipeline-canvas.focus-knn .path-zone[data-path="knn"]:not(.is-part) {
+  box-shadow: 0 0 0 3px var(--knn-color);
+}
+
+.pipeline-canvas.focus-vla .path-zone[data-path="vla"]:not(.is-part) {
+  box-shadow: 0 0 0 3px var(--vla-color);
 }
 
 /* Rollout videos */
@@ -614,6 +682,16 @@ pre#bibtex-code {
   .db-name,
   .db-delta {
     font-size: 0.8rem;
+  }
+
+  #benchmark-chart .db-head,
+  #benchmark-chart .db-row,
+  #benchmark-chart .db-axis {
+    grid-template-columns: 6rem 1fr 4.4rem;
+  }
+
+  #benchmark-chart .db-delta {
+    font-size: 0.72rem;
   }
 }
 
