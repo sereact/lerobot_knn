@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+
+  <meta name="title" content="How Much of Your VLA is kNN - Grachev, LaRocque, Moured">
+  <meta name="description" content="Training-free k-NN retrieval over demonstrations reaches 91.7% on LIBERO and shows the smallest drop under LIBERO-Plus perturbations. We use retrieval to analyze nine public VLAs.">
+  <meta name="keywords" content="vision-language-action models, VLA, k-nearest neighbors, retrieval, LIBERO, LIBERO-Plus, robustness, generalization, robot learning">
+  <meta name="author" content="Denis Grachev, Damien LaRocque, Omar Moured">
+  <meta name="robots" content="index, follow">
+
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Sereact">
+  <meta property="og:title" content="How Much of Your VLA is kNN">
+  <meta property="og:description" content="Training-free k-NN retrieval over demonstrations reaches 91.7% on LIBERO and shows the smallest drop under LIBERO-Plus perturbations.">
+  <!-- TODO: confirm the final GitHub Pages URL -->
+  <meta property="og:url" content="https://sereact.github.io/lerobot_knn/">
+  <meta property="og:image" content="https://sereact.github.io/lerobot_knn/static/images/social_preview.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="How Much of Your VLA is kNN">
+  <meta name="twitter:description" content="Training-free k-NN retrieval over demonstrations reaches 91.7% on LIBERO and shows the smallest drop under LIBERO-Plus perturbations.">
+  <meta name="twitter:image" content="https://sereact.github.io/lerobot_knn/static/images/social_preview.png">
+
+  <meta name="citation_title" content="How Much of Your VLA is kNN">
+  <meta name="citation_author" content="Grachev, Denis">
+  <meta name="citation_author" content="LaRocque, Damien">
+  <meta name="citation_author" content="Moured, Omar">
+  <meta name="citation_publication_date" content="2026">
+  <meta name="citation_conference_title" content="Conference on Robot Learning (CoRL) 2026 Workshop">
+  <meta name="citation_pdf_url" content="https://sereact.github.io/lerobot_knn/static/pdfs/how_much_of_your_vla_is_knn.pdf">
+
+  <title>How Much of Your VLA is kNN</title>
+
+  <link rel="stylesheet" href="static/css/bulma.min.css">
+  <link rel="stylesheet" href="static/css/index.css">
+  <link rel="stylesheet" href="static/css/knn.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <script defer src="static/js/fontawesome.all.min.js"></script>
+  <script defer src="static/js/index.js"></script>
+</head>
+<body>
+  <button class="scroll-to-top" onclick="scrollToTop()" title="Scroll to top" aria-label="Scroll to top">
+    <i class="fas fa-chevron-up"></i>
+  </button>
+
+  <main id="main-content">
+
+  <!-- Title, authors, links -->
+  <section class="hero">
+    <div class="hero-body">
+      <div class="container is-max-desktop has-text-centered">
+        <h1 class="title is-1 publication-title">How Much of Your VLA is <span class="knn">kNN</span></h1>
+        <div class="is-size-5 publication-authors">
+          <!-- TODO: add personal links for Denis and Omar -->
+          <span class="author-block">Denis Grachev<sup>1</sup>,</span>
+          <span class="author-block"><a href="https://damienlarocque.gitlab.io" target="_blank">Damien LaRocque</a><sup>1</sup>,</span>
+          <span class="author-block">Omar Moured<sup>1,2</sup></span>
+        </div>
+        <div class="is-size-6 publication-affiliations">
+          <span class="author-block"><sup>1</sup>Sereact GmbH</span>
+          <span class="author-block"><sup>2</sup>Karlsruher Institut für Technologie</span>
+        </div>
+        <!-- TODO: replace with the full workshop name -->
+        <div class="is-size-5 publication-venue">CoRL 2026 Workshop</div>
+        <div class="publication-links">
+          <span class="link-block">
+            <a href="static/pdfs/how_much_of_your_vla_is_knn.pdf" target="_blank" class="external-link button is-normal is-rounded is-dark">
+              <span class="icon"><i class="fas fa-file-pdf"></i></span><span>Paper</span>
+            </a>
+          </span>
+          <span class="link-block">
+            <a href="https://github.com/sereact/lerobot_knn" target="_blank" class="external-link button is-normal is-rounded is-dark">
+              <span class="icon"><i class="fab fa-github"></i></span><span>Code</span>
+            </a>
+          </span>
+          <!-- TODO: add once available
+          <span class="link-block">
+            <a href="https://arxiv.org/abs/ARXIV_ID" target="_blank" class="external-link button is-normal is-rounded is-dark">
+              <span class="icon"><i class="ai ai-arxiv"></i></span><span>arXiv</span>
+            </a>
+          </span>
+          -->
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Teaser rollouts -->
+  <section class="hero teaser">
+    <div class="container is-max-desktop">
+      <div class="hero-body">
+        <div class="video-grid is-teaser">
+          <video class="rollout" muted loop playsinline preload="metadata" poster="static/videos/rollouts/libero_spatial_4.jpg" title="pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate">
+            <source src="static/videos/rollouts/libero_spatial_4.mp4" type="video/mp4">
+          </video>
+          <video class="rollout" muted loop playsinline preload="metadata" poster="static/videos/rollouts/libero_object_7.jpg" title="pick up the milk and place it in the basket">
+            <source src="static/videos/rollouts/libero_object_7.mp4" type="video/mp4">
+          </video>
+          <video class="rollout" muted loop playsinline preload="metadata" poster="static/videos/rollouts/libero_goal_3.jpg" title="open the top drawer and put the bowl inside">
+            <source src="static/videos/rollouts/libero_goal_3.mp4" type="video/mp4">
+          </video>
+          <video class="rollout" muted loop playsinline preload="metadata" poster="static/videos/rollouts/libero_10_2.jpg" title="turn on the stove and put the moka pot on it">
+            <source src="static/videos/rollouts/libero_10_2.mp4" type="video/mp4">
+          </video>
+        </div>
+        <p class="teaser-caption">
+          No policy training: the robot reuses the actions of the most similar demonstrations.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- The idea -->
+  <section class="section hero is-light">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3">The idea</h2>
+      <div class="lead">
+        <p>
+          Robot benchmark scores are hard to interpret. They hide how much training data there is, how well it covers
+          the test situations, and how forgiving the physics is. 90&nbsp;% can be impressive, or mean very little.
+        </p>
+        <p>
+          We calibrate the score with a training-free k-NN: retrieve the demonstrations closest to the current
+          observation and reuse their action chunks. On LIBERO, where VLAs exceed 95&nbsp;%, it reaches 91.7&nbsp;%.
+        </p>
+        <p>
+          Retrieval also helps explain VLAs: with a VLA's own backbone as the retrieval key, we can analyze the
+          backbone separately from the action head.
+        </p>
+      </div>
+      <figure class="paper-figure">
+        <a href="static/images/pipeline.png" target="_blank"><img src="static/images/pipeline.png" alt="Pipeline: demonstrations feed either (a) a k-NN retrieval over an embedding memory of observations and action chunks, or (b) a VLA backbone and action head; both produce an action chunk executed in the same rollout." loading="lazy"></a>
+        <figcaption>The k-NN (a) and the VLAs (b) are evaluated with the same rollout protocol.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <!-- Findings -->
+  <section class="section">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3">What we found</h2>
+
+      <article class="finding">
+        <h3 class="finding-title"><span class="finding-num">1</span>Retrieval reaches 91.7&nbsp;% on LIBERO and shows the smallest drop under perturbation</h3>
+        <p>
+          Without a learned policy, the k-NN is on par with &pi;<sub>0</sub>-FAST on LIBERO. Under LIBERO-Plus
+          perturbations, the multimodal k-NN beats 7 of the 9 VLAs and drops the least.
+        </p>
+        <div class="cards variants">
+          <div class="card-item">
+            <h4>k-NN (ResNet) <span class="variant-score">88.7&nbsp;%</span></h4>
+            <span class="variant-tag">training-free</span>
+            <p>Image features only (frozen ResNet-18), searched within the instructed task's demonstrations.</p>
+          </div>
+          <div class="card-item">
+            <h4>k-NN (multimodal) <span class="variant-score">91.7&nbsp;%</span></h4>
+            <span class="variant-tag">training-free</span>
+            <p>Adds robot state, language, time and history, searches all demonstrations, and re-plans at every step.</p>
+          </div>
+          <div class="card-item">
+            <h4>k-NN (LAC key) <span class="variant-score">93.0&nbsp;%</span></h4>
+            <span class="variant-tag is-trained">learned key</span>
+            <p>The multimodal k-NN with a projection of the ResNet features trained with LAC (finding 5).</p>
+          </div>
+        </div>
+        <div class="dumbbell" id="benchmark-chart">
+          <div class="db-legend" aria-hidden="true">
+            <span class="db-key"><span class="db-swatch is-ring"></span>LIBERO</span>
+            <span class="db-key"><span class="db-swatch is-filled"></span>LIBERO-Plus</span>
+            <span class="db-key"><span class="db-chip is-knn"></span>k-NN (ours)</span>
+            <span class="db-key"><span class="db-chip is-vla"></span>VLA</span>
+          </div>
+          <div class="db-head" aria-hidden="true"><span></span><span>Success rate (%)</span><span>&Delta;</span></div>
+          <div class="db-rows" role="list" aria-label="Success rate on LIBERO and LIBERO-Plus for each policy"></div>
+          <div class="db-axis" aria-hidden="true">
+            <span></span>
+            <div class="db-ticks">
+              <span style="left: 0%">20</span><span style="left: 25%">40</span><span style="left: 50%">60</span><span style="left: 75%">80</span><span style="left: 100%">100</span>
+            </div>
+            <span></span>
+          </div>
+          <div class="db-tooltip" hidden></div>
+        </div>
+        <p class="chart-note">&Delta;: LIBERO-Plus minus LIBERO, in %pt.</p>
+      </article>
+
+      <article class="finding">
+        <h3 class="finding-title"><span class="finding-num">2</span>Retrieval separates the VLM backbone from the action head</h3>
+        <p>
+          We replace the ResNet features with the features of a VLA's backbone, before and after LIBERO fine-tuning.
+          When this k-NN beats the full VLA, the action head leaves useful information in the backbone unused.
+        </p>
+        <div class="dumbbell" id="backbone-chart">
+          <div class="chart-toolbar">
+            <div class="db-legend" aria-hidden="true">
+              <span class="db-key"><span class="db-swatch is-ring is-knn"></span>k-NN before fine-tuning</span>
+              <span class="db-key"><span class="db-swatch is-filled is-knn"></span>k-NN after fine-tuning</span>
+              <span class="db-key"><span class="db-swatch is-diamond"></span>VLA</span>
+            </div>
+            <div class="chart-toggle" role="group" aria-label="Benchmark">
+              <button type="button" data-benchmark="plus">LIBERO-Plus</button>
+              <button type="button" data-benchmark="libero">LIBERO</button>
+            </div>
+          </div>
+          <div class="db-head" aria-hidden="true"><span></span><span>Success rate (%)</span><span>vs VLA</span></div>
+          <div class="db-rows" role="list" aria-label="k-NN success with each VLA backbone before and after fine-tuning, and the full VLA"></div>
+          <div class="db-axis" aria-hidden="true">
+            <span></span>
+            <div class="db-ticks">
+              <span style="left: 0%">0</span><span style="left: 25%">25</span><span style="left: 50%">50</span><span style="left: 75%">75</span><span style="left: 100%">100</span>
+            </div>
+            <span></span>
+          </div>
+          <div class="db-tooltip" hidden></div>
+        </div>
+        <p class="chart-note">
+          vs VLA: k-NN after fine-tuning minus the VLA, in %pt. GR00T freezes its VLM, so before = after.
+        </p>
+      </article>
+
+      <article class="finding">
+        <h3 class="finding-title"><span class="finding-num">3</span>What LIBERO fine-tuning does to the VLM backbone</h3>
+        <ul class="facts">
+          <li><strong>A better retrieval key,</strong> mostly under perturbation: retrieval improves for 7 of 8 VLAs on LIBERO-Plus.</li>
+          <li><strong>Organized by task progress:</strong> neighbors from other demonstrations sit at a closer point of the task.</li>
+          <li><strong>Less tied to the scene:</strong> the features depend less on which LIBERO suite a frame comes from.</li>
+          <li><strong>But not always:</strong> &pi;<sub>0</sub>'s backbone collapses into one cluster per task, and retrieval drops from 86.9&nbsp;% to 17.9&nbsp;%.</li>
+        </ul>
+        <figure class="paper-figure">
+          <a href="static/images/tsne.png" target="_blank"><img src="static/images/tsne.png" alt="t-SNE maps of retrieval keys for ResNet-18, pi0.5, Evo-1, MolmoAct2 and pi0, before and after training, colored by episode progress." loading="lazy"></a>
+          <figcaption>Retrieval keys before (top) and after (bottom) fine-tuning, colored by episode progress. Lower gap: neighbors at a closer point of the task.</figcaption>
+        </figure>
+      </article>
+
+      <article class="finding">
+        <h3 class="finding-title"><span class="finding-num">4</span>The actions of the VLAs remain close to the demonstrations</h3>
+        <p>
+          We run each VLA on LIBERO and record the action chunks it outputs. Then we check how similar these actions
+          are to the actions in the training demonstrations, in two ways (below).
+        </p>
+        <p>
+          To tell whether the results are high or low, we run the same two checks on random samples from the dataset:
+          frames of the demonstrations, each time with its own demonstration left out of the search. They show how
+          similar a new demonstration naturally is to the other ones.
+        </p>
+        <div class="cards is-two">
+          <div class="card-item">
+            <h4>(a) Can the k-NN predict what the VLA does?</h4>
+            <p>At each state the VLA visits, the k-NN looks up the most similar demonstration frames and predicts the next actions. R² measures how well this prediction matches what the VLA actually did.</p>
+            <p class="card-result">R² is 0.63&ndash;0.93 for the VLAs and 0.78 for the dataset samples: 5 of 8 VLAs are more predictable than the demonstrations themselves.</p>
+          </div>
+          <div class="card-item">
+            <h4>(b) Has the VLA seen this action before?</h4>
+            <p>For each action chunk the VLA outputs, we search the training demonstrations of the task for the most similar chunk and measure how far it is.</p>
+            <p class="card-result">For every VLA, the most similar training chunk is closer than for the dataset samples: the typical distance is 0.62&ndash;0.99 times theirs. VLAs repeat action chunks from the training data more closely than a new demonstration does.</p>
+          </div>
+        </div>
+        <figure class="paper-figure is-medium">
+          <a href="static/images/action_space.png" target="_blank"><img src="static/images/action_space.png" alt="Bar charts per VLA: (a) R-squared to the k-NN prediction, between 0.63 and 0.93, with held-out dataset samples at 0.78; (b) distance to the nearest training chunk relative to those samples, between 0.62 and 0.99." loading="lazy"></a>
+          <figcaption>Dashed lines (&ldquo;ground-truth chunks&rdquo;): the dataset samples. &dagger;LIBERO-Spatial only. X-VLA predicts absolute poses and is excluded.</figcaption>
+        </figure>
+        <div class="takeaway">
+          <strong>What this means.</strong> On LIBERO, VLA actions stay close to demonstrated behavior, which the k-NN
+          reuses explicitly. The nearest demonstrations also show where a VLA's action comes from.
+        </div>
+      </article>
+
+      <article class="finding">
+        <h3 class="finding-title"><span class="finding-num">5</span>LAC: an offline metric that can guide the training of a retrieval key</h3>
+        <p>
+          Testing a retrieval key normally takes thousands of rollouts. Local Action Consistency (LAC) scores it from the
+          demonstrations alone, by checking whether nearest neighbors also share their future actions.
+        </p>
+        <figure class="paper-figure">
+          <a href="static/images/lac.png" target="_blank"><img src="static/images/lac.png" alt="Two example queries: when the k nearest frames share the query's action, predicted motions agree and LAC is about 0.9; when the neighbors mix approach, grasp and lift actions, LAC is about 0.1." loading="lazy"></a>
+        </figure>
+        <div class="cards">
+          <div class="card-item">
+            <h4>Tracks success</h4>
+            <p>Follows closed-loop success (r&nbsp;=&nbsp;0.78), but cannot rank keys of similar quality.</p>
+          </div>
+          <div class="card-item">
+            <h4>Flags broken keys</h4>
+            <p>&pi;<sub>0</sub>'s collapsed backbone scores 0.55; all other keys score 0.76&ndash;0.88.</p>
+          </div>
+          <div class="card-item">
+            <h4>Trains better keys</h4>
+            <p>Used as a loss, it lifts k-NN (ResNet) from 88.7&nbsp;% to 93.0&nbsp;%.</p>
+          </div>
+        </div>
+        <figure class="paper-figure is-medium">
+          <a href="static/images/lac_vs_success.png" target="_blank"><img src="static/images/lac_vs_success.png" alt="Scatter plot of LIBERO success against offline LAC for image encoders and VLM backbones before and after fine-tuning; the LAC-trained key is highest among image encoders." loading="lazy"></a>
+          <figcaption>Offline LAC versus closed-loop success, one point per retrieval key.</figcaption>
+        </figure>
+      </article>
+    </div>
+  </section>
+
+  <!-- Read the paper -->
+  <section class="section hero is-light cta">
+    <div class="container is-max-desktop has-text-centered">
+      <h2 class="title is-3">Read the full paper</h2>
+      <p class="lead">
+        Full results for all nine VLAs, ablations, and the details of LAC.
+      </p>
+      <div class="publication-links">
+        <span class="link-block">
+          <a href="static/pdfs/how_much_of_your_vla_is_knn.pdf" target="_blank" class="external-link button is-medium is-rounded is-dark">
+            <span class="icon"><i class="fas fa-file-pdf"></i></span><span>Paper (PDF)</span>
+          </a>
+        </span>
+        <span class="link-block">
+          <a href="https://github.com/sereact/lerobot_knn" target="_blank" class="external-link button is-medium is-rounded is-dark">
+            <span class="icon"><i class="fab fa-github"></i></span><span>Code</span>
+          </a>
+        </span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Rollout gallery -->
+  <section class="section" id="rollouts">
+    <div class="container is-max-desktop">
+      <h2 class="title is-3">k-NN (multimodal) on all 40 LIBERO tasks</h2>
+      <p class="lead has-text-centered">One successful episode per task at 2&times; speed, with the task's success over 50 episodes.</p>
+      <div class="tabs is-toggle is-centered is-small suite-tabs">
+        <ul>
+          <li class="is-active" data-suite="libero_spatial"><a href="#rollouts">Spatial<span class="rate">88.0&nbsp;%</span></a></li>
+          <li data-suite="libero_object"><a href="#rollouts">Object<span class="rate">99.8&nbsp;%</span></a></li>
+          <li data-suite="libero_goal"><a href="#rollouts">Goal<span class="rate">97.6&nbsp;%</span></a></li>
+          <li data-suite="libero_10"><a href="#rollouts">Long<span class="rate">81.4&nbsp;%</span></a></li>
+        </ul>
+      </div>
+      <div class="suite-panel video-grid" data-suite="libero_spatial">
+        <figure class="rollout-tile" title="pick up the black bowl between the plate and the ramekin and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_0.jpg">
+            <source src="static/videos/rollouts/libero_spatial_0.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">44/50</span>pick up the black bowl between the plate and the ramekin and place it on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the black bowl next to the ramekin and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_1.jpg">
+            <source src="static/videos/rollouts/libero_spatial_1.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">47/50</span>pick up the black bowl next to the ramekin and place it on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the black bowl from table center and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_2.jpg">
+            <source src="static/videos/rollouts/libero_spatial_2.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the black bowl from table center and place it on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the black bowl on the cookie box and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_3.jpg">
+            <source src="static/videos/rollouts/libero_spatial_3.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">48/50</span>pick up the black bowl on the cookie box and place it on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_4.jpg">
+            <source src="static/videos/rollouts/libero_spatial_4.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the black bowl in the top drawer of the wooden cabinet and place it on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the black bowl on the ramekin and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_5.jpg">
+            <source src="static/videos/rollouts/libero_spatial_5.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">16/50</span>pick up the black bowl on the ramekin and place it on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the black bowl next to the cookie box and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_6.jpg">
+            <source src="static/videos/rollouts/libero_spatial_6.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">49/50</span>pick up the black bowl next to the cookie box and place it on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the black bowl on the stove and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_7.jpg">
+            <source src="static/videos/rollouts/libero_spatial_7.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">49/50</span>pick up the black bowl on the stove and place it on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the black bowl next to the plate and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_8.jpg">
+            <source src="static/videos/rollouts/libero_spatial_8.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">42/50</span>pick up the black bowl next to the plate and place it on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the black bowl on the wooden cabinet and place it on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_spatial_9.jpg">
+            <source src="static/videos/rollouts/libero_spatial_9.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">45/50</span>pick up the black bowl on the wooden cabinet and place it on the plate</figcaption>
+        </figure>
+      </div>
+      <div class="suite-panel video-grid" data-suite="libero_object" hidden>
+        <figure class="rollout-tile" title="pick up the alphabet soup and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_0.jpg">
+            <source src="static/videos/rollouts/libero_object_0.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the alphabet soup and place it in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the cream cheese and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_1.jpg">
+            <source src="static/videos/rollouts/libero_object_1.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the cream cheese and place it in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the salad dressing and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_2.jpg">
+            <source src="static/videos/rollouts/libero_object_2.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the salad dressing and place it in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the bbq sauce and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_3.jpg">
+            <source src="static/videos/rollouts/libero_object_3.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the bbq sauce and place it in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the ketchup and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_4.jpg">
+            <source src="static/videos/rollouts/libero_object_4.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the ketchup and place it in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the tomato sauce and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_5.jpg">
+            <source src="static/videos/rollouts/libero_object_5.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">49/50</span>pick up the tomato sauce and place it in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the butter and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_6.jpg">
+            <source src="static/videos/rollouts/libero_object_6.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the butter and place it in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the milk and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_7.jpg">
+            <source src="static/videos/rollouts/libero_object_7.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the milk and place it in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the chocolate pudding and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_8.jpg">
+            <source src="static/videos/rollouts/libero_object_8.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the chocolate pudding and place it in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the orange juice and place it in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_object_9.jpg">
+            <source src="static/videos/rollouts/libero_object_9.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>pick up the orange juice and place it in the basket</figcaption>
+        </figure>
+      </div>
+      <div class="suite-panel video-grid" data-suite="libero_goal" hidden>
+        <figure class="rollout-tile" title="open the middle drawer of the cabinet">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_0.jpg">
+            <source src="static/videos/rollouts/libero_goal_0.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>open the middle drawer of the cabinet</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the bowl on the stove">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_1.jpg">
+            <source src="static/videos/rollouts/libero_goal_1.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">48/50</span>put the bowl on the stove</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the wine bottle on top of the cabinet">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_2.jpg">
+            <source src="static/videos/rollouts/libero_goal_2.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">47/50</span>put the wine bottle on top of the cabinet</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="open the top drawer and put the bowl inside">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_3.jpg">
+            <source src="static/videos/rollouts/libero_goal_3.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">48/50</span>open the top drawer and put the bowl inside</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the bowl on top of the cabinet">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_4.jpg">
+            <source src="static/videos/rollouts/libero_goal_4.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>put the bowl on top of the cabinet</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="push the plate to the front of the stove">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_5.jpg">
+            <source src="static/videos/rollouts/libero_goal_5.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>push the plate to the front of the stove</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the cream cheese in the bowl">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_6.jpg">
+            <source src="static/videos/rollouts/libero_goal_6.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">49/50</span>put the cream cheese in the bowl</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="turn on the stove">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_7.jpg">
+            <source src="static/videos/rollouts/libero_goal_7.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>turn on the stove</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the bowl on the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_8.jpg">
+            <source src="static/videos/rollouts/libero_goal_8.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">49/50</span>put the bowl on the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the wine bottle on the rack">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_goal_9.jpg">
+            <source src="static/videos/rollouts/libero_goal_9.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">47/50</span>put the wine bottle on the rack</figcaption>
+        </figure>
+      </div>
+      <div class="suite-panel video-grid" data-suite="libero_10" hidden>
+        <figure class="rollout-tile" title="put both the alphabet soup and the tomato sauce in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_0.jpg">
+            <source src="static/videos/rollouts/libero_10_0.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">34/50</span>put both the alphabet soup and the tomato sauce in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put both the cream cheese box and the butter in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_1.jpg">
+            <source src="static/videos/rollouts/libero_10_1.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">41/50</span>put both the cream cheese box and the butter in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="turn on the stove and put the moka pot on it">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_2.jpg">
+            <source src="static/videos/rollouts/libero_10_2.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">48/50</span>turn on the stove and put the moka pot on it</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the black bowl in the bottom drawer of the cabinet and close it">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_3.jpg">
+            <source src="static/videos/rollouts/libero_10_3.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">50/50</span>put the black bowl in the bottom drawer of the cabinet and close it</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the white mug on the left plate and put the yellow and white mug on the right plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_4.jpg">
+            <source src="static/videos/rollouts/libero_10_4.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">44/50</span>put the white mug on the left plate and put the yellow and white mug on the right plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="pick up the book and place it in the back compartment of the caddy">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_5.jpg">
+            <source src="static/videos/rollouts/libero_10_5.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">49/50</span>pick up the book and place it in the back compartment of the caddy</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the white mug on the plate and put the chocolate pudding to the right of the plate">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_6.jpg">
+            <source src="static/videos/rollouts/libero_10_6.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">28/50</span>put the white mug on the plate and put the chocolate pudding to the right of the plate</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put both the alphabet soup and the cream cheese box in the basket">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_7.jpg">
+            <source src="static/videos/rollouts/libero_10_7.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">39/50</span>put both the alphabet soup and the cream cheese box in the basket</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put both moka pots on the stove">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_8.jpg">
+            <source src="static/videos/rollouts/libero_10_8.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">35/50</span>put both moka pots on the stove</figcaption>
+        </figure>
+        <figure class="rollout-tile" title="put the yellow and white mug in the microwave and close it">
+          <video class="rollout" muted loop playsinline preload="none" poster="static/videos/rollouts/libero_10_9.jpg">
+            <source src="static/videos/rollouts/libero_10_9.mp4" type="video/mp4">
+          </video>
+          <figcaption><span class="rate">39/50</span>put the yellow and white mug in the microwave and close it</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <!-- BibTeX -->
+  <section class="section hero is-light" id="BibTeX">
+    <div class="container is-max-desktop content">
+      <div class="bibtex-header">
+        <h2 class="title">BibTeX</h2>
+        <button class="copy-bibtex-btn" onclick="copyBibTeX()" title="Copy BibTeX to clipboard">
+          <i class="fas fa-copy"></i>
+          <span class="copy-text">Copy</span>
+        </button>
+      </div>
+      <!-- TODO: update booktitle with the full workshop name -->
+      <pre id="bibtex-code"><code>@inproceedings{grachev2026knn,
+  title     = {How Much of Your {VLA} is {kNN}},
+  author    = {Grachev, Denis and LaRocque, Damien and Moured, Omar},
+  booktitle = {CoRL 2026 Workshop},
+  year      = {2026},
+  url       = {https://sereact.github.io/lerobot_knn/}
+}</code></pre>
+    </div>
+  </section>
+
+  </main>
+
+  <footer class="footer">
+    <div class="container has-text-centered">
+      <p>
+        Built with the <a href="https://github.com/eliahuhorwitz/Academic-project-page-template" target="_blank">Academic Project Page Template</a>
+        (adopted from <a href="https://nerfies.github.io" target="_blank">Nerfies</a>), following
+        <a href="https://norlab-ulaval.github.io/BorealTC/" target="_blank">BorealTC</a>.
+        Licensed under <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/" target="_blank">CC BY-SA 4.0</a>.
+      </p>
+    </div>
+  </footer>
+</body>
+</html>
