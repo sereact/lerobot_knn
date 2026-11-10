@@ -549,7 +549,7 @@
             <div class="db-legend" aria-hidden="true">
               <span class="db-key"><span class="db-swatch is-ring"></span>LIBERO</span>
               <span class="db-key"><span class="db-swatch is-filled"></span>LIBERO-Plus</span>
-              <span class="db-key"><span class="db-chip is-knn"></span><em>k</em>-NN (ours)</span>
+              <span class="db-key"><span class="db-chip is-knn"></span><span><em>k</em>-NN (ours)</span></span>
               <span class="db-key"><span class="db-chip is-vla"></span>VLA</span>
             </div>
             <div class="db-head" aria-hidden="true"><span></span><span>Success rate (%)</span><span></span></div>
@@ -564,22 +564,26 @@
             </div>
             <div class="db-tooltip" hidden></div>
           </div>
-          <p class="chart-note">Success rate (%) on LIBERO (official protocol, 2000 episodes) and on the same 420
-            LIBERO-Plus variants.</p>
+          <p class="chart-note">Results on the 2,000 eval episodes of LIBERO and the same 420 variants (60 per
+            perturbation) of LIBERO-Plus for every policy.</p>
         </article>
 
         <article class="finding">
-          <h3 class="finding-title"><span class="finding-num">2</span>Retrieval separates the VLM backbone from the
-            action head</h3>
-          <p>
-            We replace the ResNet features with the features of a VLA's backbone, before and after LIBERO fine-tuning.
-            When this k-NN beats the full VLA, the action head leaves useful information in the backbone unused.
+          <h3 class="finding-title"><span class="finding-num">2</span>Retrieval-based policies can outperform fine-tuned
+            action heads on VLAs</h3>
+          <p>We replace each VLA's action head with a <em>k</em>-NN keyed on its own frozen VLM. For some VLAs, this
+            <em>k</em>-NN outperforms the action head (2 of 9 on LIBERO, 4 of 9 on LIBERO-Plus), which suggests the VLM
+            already encodes enough information to generate the actions.
           </p>
           <div class="dumbbell" id="backbone-chart">
             <div class="chart-toolbar">
               <div class="db-legend" aria-hidden="true">
-                <span class="db-key"><span class="db-swatch is-ring is-knn"></span>k-NN before fine-tuning</span>
-                <span class="db-key"><span class="db-swatch is-filled is-knn"></span>k-NN after fine-tuning</span>
+                <span class="db-key"><span class="db-swatch is-ring is-knn"></span>
+                  <span><em>k</em>-NN before fine-tuning</span>
+                </span>
+                <span class="db-key"><span class="db-swatch is-filled is-knn"></span>
+                  <span><em>k</em>-NN after fine-tuning</span>
+                </span>
                 <span class="db-key"><span class="db-swatch is-diamond"></span>VLA</span>
               </div>
               <div class="chart-toggle" role="group" aria-label="Benchmark">
@@ -601,71 +605,77 @@
             <div class="db-tooltip" hidden></div>
           </div>
           <p class="chart-note">
-            k-NN success using each VLA's VLM backbone before and after LIBERO fine-tuning, compared with the full VLA.
-            vs VLA: k-NN after fine-tuning minus the VLA, in %pt. GR00T freezes its VLM, so before = after.
+            <em>k</em>-NN success rate using the fine-tuned VLM backbone vs the complete VLA (%pt).
+            GR00T's VLM is frozen, hence before = after.
           </p>
         </article>
 
         <article class="finding">
-          <h3 class="finding-title"><span class="finding-num">3</span>What LIBERO fine-tuning does to the VLM backbone
+          <h3 class="finding-title">
+            <span class="finding-num">3</span>Fine-tuning on LIBERO reshapes VLM representations and often improves
+            retrieval
           </h3>
           <ul class="facts">
-            <li><strong>A better retrieval key,</strong> mostly under perturbation: retrieval improves for 7 of 8 VLAs
-              on LIBERO-Plus.</li>
-            <li><strong>Organized by task progress:</strong> neighbors from other demonstrations sit at a closer point
-              of the task.</li>
-            <li><strong>Less tied to the scene:</strong> the features depend less on which LIBERO suite a frame comes
-              from.</li>
-            <li><strong>But not always:</strong> &pi;<sub>0</sub>'s backbone collapses into one cluster per task, and
-              retrieval drops from 86.9&nbsp;% to 17.9&nbsp;%.</li>
+            <li><strong>Better retrieval under perturbations</strong> for 7 of 8 fine-tuned VLAs.</li>
+            <li>
+              <strong>Closer in task progress:</strong> nearest neighbors from other demonstrations are closer in
+              episode progress for most models.
+            </li>
+            <li>
+              <strong>Less scene-dependent:</strong> representations depend less on the LIBERO suite.
+            </li>
+            <li><strong>One exception, &pi;<sub>0</sub>:</strong>
+              representations collapse into task clusters, and
+              <em>k</em>-NN success drops from 86.9&nbsp;% to 17.9&nbsp;%.
+            </li>
           </ul>
           <figure class="paper-figure">
             <a href="static/images/tsne.png" target="_blank"><img src="static/images/tsne.png"
                 alt="t-SNE maps of retrieval keys for ResNet-18, pi0.5, Evo-1, MolmoAct2 and pi0, before and after training, colored by episode progress."
                 loading="lazy"></a>
             <figcaption>
-              t-SNE maps of retrieval keys for the same 4,150 demonstration frames from LIBERO. Top: before LIBERO
-              fine-tuning (ImageNet ResNet-18 for the first column). Bottom: after fine-tuning (LAC-trained key for the
-              first column). Colors indicate normalized episode progress. Below each map: median progress gap to the
-              nearest frame from another demonstration of the same task.
+              t-SNE of the same 4,150 demonstration frames, colored by episode progress.<br />
+              Top: before fine-tuning.<br />
+              Bottom: after fine-tuning (LAC training for ResNet-18).<br />
+              Values below each map show the median progress gap to the nearest same-task frame from another
+              demonstration.
             </figcaption>
           </figure>
         </article>
 
         <article class="finding">
-          <h3 class="finding-title"><span class="finding-num">4</span>The actions of the VLAs remain close to the
-            demonstrations</h3>
+          <h3 class="finding-title">
+            <span class="finding-num">4</span>
+            <span>
+              VLA-generated actions remain close to simple <em>k</em>-NN retrieval
+            </span>
+          </h3>
           <p>
-            We record the action chunks each VLA outputs in its LIBERO rollouts and compare them with the
-            demonstrations,
-            using held-out demonstrations as the yardstick for what a new, valid demonstration looks like.
-          </p>
-          <p>
-            At the states a VLA visits, the k-NN, which only reuses demonstrated actions, predicts the actions of 5 of
-            the 8 VLAs better than it predicts held-out demonstrations. And for every VLA, the closest action chunk in
-            the
-            training data is nearer than it is for held-out demonstrations.
-          </p>
-          <p>
-            On LIBERO, the VLAs thus stay closer to their training data than a new demonstration of the same task does,
-            and much of their behavior can be explained by the nearest demonstrations.
-          </p>
+            Although VLAs generate actions using learned policy heads, their predictions often closely resemble those of
+            a simple <em>k</em>-NN retrieval.
+            For 5 of 8 VLAs, <em>k</em>-NN predictions are more similar to VLA-generated actions than to held-out
+            ground-truth actions.
+            Moreover, all eight VLAs produce action chunks closer to the training demonstrations than held-out
+            ground-truth chunks are.
         </article>
 
         <article class="finding">
-          <h3 class="finding-title"><span class="finding-num">5</span>LAC tracks retrieval success</h3>
+          <h3 class="finding-title"><span class="finding-num">5</span>
+            LAC provides an offline measure of retrieval quality
+          </h3>
           <p>
-            LAC tracks closed-loop retrieval success (Pearson r&nbsp;=&nbsp;0.78), but does not reliably rank keys of
-            similar quality (Spearman &rho;&nbsp;=&nbsp;0.61).
+            Can we evaluate a retrieval key without running rollouts?
+            We compute LAC on held-out demonstrations and compare it with the success of <em>k</em>-NN policies using
+            the same representations.
+            Higher LAC generally corresponds to better retrieval performance, although it cannot reliably distinguish
+            keys of similar quality.
           </p>
           <figure class="paper-figure is-medium">
             <a href="static/images/lac_vs_success.png" target="_blank"><img src="static/images/lac_vs_success.png"
-                alt="Scatter plot of LIBERO success against offline LAC for image encoders and VLM backbones before and after fine-tuning; the LAC-trained key is highest among image encoders."
-                loading="lazy"></a>
+                alt="Scatter plot comparing offline LAC with LIBERO retrieval success." loading="lazy"></a>
             <figcaption>
-              Offline LAC versus closed-loop retrieval success. Each point is a visual representation used as the key of
-              the ResNet k-NN variant. The dashed line is fitted on all keys except the fine-tuned VLM backbones, which
-              were trained on the held-out demonstrations.
+              Each point represents a retrieval key: offline LAC versus LIBERO rollout success.
+              The dashed trend excludes fine-tuned VLM backbones, which were trained on the held-out demonstrations.
             </figcaption>
           </figure>
         </article>
