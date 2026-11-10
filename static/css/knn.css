@@ -714,3 +714,9 @@ pre#bibtex-code {
 .teaser .hero-body {
   padding-top: 0.5rem;
 }
+
+/* BibTeX syntax colors: plain spans, so the Copy button (textContent) still copies plain text */
+#bibtex-code .bib-type { color: #c4501f; font-weight: 600; }   /* a darker k-NN orange, readable on the light box */
+#bibtex-code .bib-key { color: var(--text-secondary); }
+#bibtex-code .bib-field { color: #1c5cab; }
+#bibtex-code .bib-value { color: var(--text-primary); }
