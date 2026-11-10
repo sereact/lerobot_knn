@@ -81,8 +81,11 @@
   max-width: 720px;
 }
 
+/* The caption block is centered under the figure, its lines left-aligned (captions with <br> line breaks) */
 .paper-figure figcaption {
-  margin-top: 0.6rem;
+  display: table;
+  margin: 0.6rem auto 0;
+  text-align: left;
   font-size: 0.92rem;
   color: var(--text-secondary);
 }
