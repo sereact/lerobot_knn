@@ -432,7 +432,7 @@
               </figcaption>
             </figure>
           </div>
-          <p class="teaser-caption">Training-free k-NN rollouts on all 40 LIBERO tasks (2&times; speed).</p>
+          <p class="teaser-caption">Training-free <em>k</em>-NN rollouts on all 40 LIBERO tasks (2&times; speed).</p>
         </div>
       </div>
     </section>
@@ -481,28 +481,27 @@
                 style="left: 23.53%; top: 75.96%; width: 3.16%; height: 3.85%"></div>
             </div>
           </div>
-          <figcaption>
-            Overview of our evaluation pipeline. (a) A k-NN retrieves neighboring demonstration embeddings and combines
-            their associated action chunks; (b) the VLA predicts an action chunk directly through its backbone and
-            action
-            head. Both are evaluated with the same rollout protocol.
+          <figcaption style="text-align: left;">
+            Overview of our evaluation pipeline. We use the same rollouts for all evaluations.<br />
+            (a) <em>k</em>-NN: retrieves the nearest demonstration frames, and combine their corresponding action
+            chunks.<br />
+            (b) VLA: predicts an action chunk directly through its backbone and action head.
           </figcaption>
         </figure>
 
         <h3 class="subsection-title">Local Action Consistency (LAC)</h3>
         <p class="section-text">
-          LAC is an offline metric for evaluating retrieval representations without rollouts. For each held-out query,
-          it measures whether its nearest neighbors in representation space also exhibit similar future action chunks,
-          relative to other demonstrations from the same task. A differentiable surrogate of LAC can also be used to
-          train a retrieval key.
+          Do similar representations correspond to similar future actions? We introduce an offline metric that tests
+          this without robot rollouts. For each query, it measures whether nearby demonstrations in representation space
+          have more similar future action chunks than other demonstrations of the same task.
         </p>
         <figure class="paper-figure">
           <a href="static/images/lac.png" target="_blank"><img src="static/images/lac.png"
               alt="Two example queries: when the k nearest frames share the query's action, predicted motions agree and LAC is about 0.9; when the neighbors mix approach, grasp and lift actions, LAC is about 0.1."
               loading="lazy"></a>
           <figcaption>
-            LAC compares the average action distance of the retrieved k nearest neighbors with the average action
-            distance over the same-task set.
+            LAC compares the average future-action distance from a query to its <em>k</em> nearest neighbors in
+            representation space with the average distance to demonstrations from the same task.
           </figcaption>
         </figure>
       </div>
@@ -514,36 +513,35 @@
         <h2 class="title is-3">Results</h2>
 
         <article class="finding">
-          <h3 class="finding-title"><span class="finding-num">1</span>Retrieval reaches 91.7&nbsp;% on LIBERO and shows
-            the smallest drop under perturbation</h3>
+          <h3 class="finding-title"><span class="finding-num">1</span>Retrieval reaches 91.7&nbsp;% success on LIBERO
+            and remains robust to perturbations</h3>
           <p>
-            Without a learned policy, the k-NN is on par with &pi;<sub>0</sub>-FAST on LIBERO. Under LIBERO-Plus
-            perturbations, the multimodal k-NN beats 7 of the 9 VLAs and drops the least.
+            Without a learned policy, the <em>k</em>-NN is on par with &pi;<sub>0</sub>-FAST on LIBERO. On
+            LIBERO-Plus, the multimodal <em>k</em>-NN outperforms 7 of the 9 evaluated VLAs and
+            shows the smallest drop in success rate under perturbations.
           </p>
           <div class="cards variants">
             <div class="card-item">
-              <h4>k-NN (ResNet) <span class="variant-score">88.7&nbsp;%</span></h4>
+              <h4><em>k</em>-NN (ResNet) <span class="variant-score">88.7&nbsp;%</span></h4>
               <span class="variant-tag">training-free</span>
-              <p>Using only image features with a frozen ResNet-18, queries within the instructed task's
-                demonstrations.</p>
+              <p>Frozen ResNet-18 features. Retrieval within the same task.</p>
             </div>
             <div class="card-item">
-              <h4>k-NN (Multimodal) <span class="variant-score">91.7&nbsp;%</span></h4>
+              <h4><em>k</em>-NN (Multimodal) <span class="variant-score">91.7&nbsp;%</span></h4>
               <span class="variant-tag">training-free</span>
-              <p>Including robot state, language, time and history, queries all demonstrations.
-              </p>
+              <p>+ robot state, language, time, and history. Retrieval across all tasks.</p>
             </div>
             <div class="card-item">
-              <h4>k-NN (LAC key) <span class="variant-score">93.0&nbsp;%</span></h4>
+              <h4><em>k</em>-NN (LAC key) <span class="variant-score">93.0&nbsp;%</span></h4>
               <span class="variant-tag is-trained">learned key</span>
-              <p>Like multiomodal, but with a projection of the ResNet features trained with LAC.</p>
+              <p>Multimodal retrieval with a LAC-trained projection of ResNet features.</p>
             </div>
           </div>
           <div class="dumbbell" id="benchmark-chart">
             <div class="db-legend" aria-hidden="true">
               <span class="db-key"><span class="db-swatch is-ring"></span>LIBERO</span>
               <span class="db-key"><span class="db-swatch is-filled"></span>LIBERO-Plus</span>
-              <span class="db-key"><span class="db-chip is-knn"></span>k-NN (ours)</span>
+              <span class="db-key"><span class="db-chip is-knn"></span><em>k</em>-NN (ours)</span>
               <span class="db-key"><span class="db-chip is-vla"></span>VLA</span>
             </div>
             <div class="db-head" aria-hidden="true"><span></span><span>Success rate (%)</span><span></span></div>
