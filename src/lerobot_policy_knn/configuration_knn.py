@@ -98,7 +98,7 @@ class KNNConfig(PreTrainedConfig):
     gripper_index: int = -1
     # Action dims retrieved relative to the state (LeRobot's relative actions): every neighbour's chunk is re-anchored
     # on the query, chunk - state(neighbour key frame) + state(query), on the same state indices. For absolute
-    # end-effector targets (e.g. derroboter's xyz + rot6d per arm, grippers left absolute): a neighbour recorded
+    # end-effector targets (e.g. xyz + rot6d per arm, grippers left absolute): a neighbour recorded
     # elsewhere in the workspace then contributes its motion instead of its position. Empty: absolute actions.
     relative_action_dims: list[int] = field(default_factory=list)
 

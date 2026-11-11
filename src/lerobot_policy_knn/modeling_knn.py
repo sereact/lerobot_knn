@@ -21,7 +21,7 @@ from lerobot.policies import PreTrainedPolicy
 from lerobot.utils.constants import ACTION, OBS_STATE
 
 from .configuration_knn import KNNConfig
-from .encoders import ImageEncoder, TextEncoder, finalize_features
+from .encoders import ImageEncoder, TextEncoder, normalize_keys
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,7 @@ def axis_angle_to_matrix(axis_angle: Tensor) -> Tensor:
 
 
 def featurize_state(state: Tensor, axis_angle_start: int | None) -> Tensor:
+    """The state as it enters distances: its axis-angle triplet (if any) replaced by the rotation matrix."""
     state = state.float()
     if axis_angle_start is None:
         return state
@@ -190,29 +191,18 @@ class KNNPolicy(PreTrainedPolicy):
 
     def key_features(self, key_name: str, raw: Tensor) -> Tensor:
         """Raw pooled features -> unit-norm retrieval key, exactly as the memory keys were built."""
-        raw = self.standardize_raw(key_name, raw)
-        proj = getattr(self, f"norm_proj_{key_name.removeprefix('key_cam_')}", None)
-        if proj is not None:
-            return torch.nn.functional.normalize(raw.float() @ proj, dim=-1)
-        return finalize_features(raw, self.config.image_pooling)
-
-    def standardize_raw(self, key_name: str, raw: Tensor) -> Tensor:
-        """Apply the memory's per-dimension standardisation (``key_norm="zscore"``) to raw query features."""
-        name = key_name.removeprefix("key_cam_")
-        mean = getattr(self, f"norm_mean_{name}", None)
-        if mean is None:
-            return raw
-        return (raw.float() - mean) / getattr(self, f"norm_std_{name}")
+        camera = key_name.removeprefix("key_cam_")
+        mean, std, proj = (getattr(self, f"norm_{kind}_{camera}", None) for kind in ("mean", "std", "proj"))
+        return normalize_keys(raw, self.config.image_pooling, mean, std, proj)
 
     def image_encoder(self) -> Any:
         cfg = self.config
         if cfg.image_encoder.startswith("vla:"):
             from .vla import VLAEmbedder
 
+            name = cfg.image_encoder.removeprefix("vla:")
             taps = (cfg.image_pooling.split("@", 1)[1],) if "@" in cfg.image_pooling else ()
-            return self._frozen_module(
-                "image", lambda: VLAEmbedder(cfg.image_encoder[4:], str(self.device), taps=taps)
-            )
+            return self._frozen_module("image", lambda: VLAEmbedder(name, str(self.device), taps=taps))
         return self._frozen_module("image", lambda: ImageEncoder(cfg.image_encoder, cfg.image_resolution))
 
     def text_encoder(self) -> TextEncoder:
@@ -236,16 +226,14 @@ class KNNPolicy(PreTrainedPolicy):
 
         Envs that still have queued actions only pop them; callers may skip building their images.
         """
-        out = []
-        for env_id in env_ids:
-            slot = self._slots.get(env_id)
-            if slot is None:
-                out.append(True)
-            elif slot.backtrack:
-                out.append(False)
-            else:
-                out.append(self.config.temporal_ensemble_coeff is not None or not slot.queue)
-        return out
+        slots = [self._slots.get(env_id) for env_id in env_ids]
+        return [slot is None or self._needs_retrieval(slot) for slot in slots]
+
+    def _needs_retrieval(self, slot: _EnvSlot) -> bool:
+        """Temporal ensembling retrieves at every step, chunked execution once the queue is empty."""
+        if slot.backtrack:
+            return False
+        return self.config.temporal_ensemble_coeff is not None or not slot.queue
 
     def reset_envs(self, env_ids: list[int]) -> None:
         """Forget the inference state of some environments (e.g. after their episode ended)."""
@@ -594,57 +582,79 @@ class KNNPolicy(PreTrainedPolicy):
 
     # ------------------------------------------------------------------ policy API
     def _predict(self, batch: dict[str, Any], t: Tensor, slots: list[_EnvSlot] | None = None) -> Tensor:
+        """Action chunks (B, H, A) for a batch of observations at steps ``t``.
+
+        ``slots`` holds each row's inference state; with it the retrieval also uses (and updates) the history,
+        stickiness and retry terms. Without it the retrieval is stateless.
+        """
+        cfg = self.config
         query = self.encode_observation(batch)
         tasks = batch.get(TASK_KEY)
-        if isinstance(tasks, str):
-            tasks = [tasks]
-        continuation = None
-        if slots is not None and self.config.consistency_weight > 0:
-            episodes, frames = [], []
-            for slot in slots:
-                if slot.last_match is None:
-                    episodes.append(-1)
-                    frames.append(0)
-                else:
-                    ep, fr, t0 = slot.last_match
-                    episodes.append(ep)
-                    frames.append(fr + slot.t - t0)
-            continuation = (self._as_device_tensor(episodes), self._as_device_tensor(frames))
-        history = self.history_distance(slots) if slots is not None else None
-        task_ids = self.task_ids(tasks)
-        excluded = [slot.tabu for slot in slots] if slots is not None and self.config.retry_tabu else None
+        task_ids = self.task_ids([tasks] if isinstance(tasks, str) else tasks)
+        continuation = history = excluded = None
+        if slots is not None:
+            continuation = self._expected_continuation(slots)
+            history = self.history_distance(slots)
+            excluded = [slot.tabu for slot in slots] if cfg.retry_tabu else None
         rows, weights, dists = self.retrieve(
             query, t, task_ids, continuation=continuation, extra_distance=history, excluded=excluded
         )
+        if slots is not None:
+            self._remember_retrieval(slots, query, task_ids, rows, dists, history)
+        query_state = batch[OBS_STATE].to(self.device) if cfg.relative_action_dims else None
+        return self.aggregate(rows, weights, query_state)
+
+    def _expected_continuation(self, slots: list[_EnvSlot]) -> tuple[Tensor, Tensor] | None:
+        """(episode, frame) each env would be at now had it kept following its previous top-1 match."""
+        if self.config.consistency_weight <= 0:
+            return None
+        episodes, frames = [], []
+        for slot in slots:
+            if slot.last_match is None:
+                episodes.append(-1)
+                frames.append(0)
+            else:
+                episode, frame, t_match = slot.last_match
+                episodes.append(episode)
+                frames.append(frame + slot.t - t_match)
+        return self._as_device_tensor(episodes), self._as_device_tensor(frames)
+
+    def _remember_retrieval(
+        self,
+        slots: list[_EnvSlot],
+        query: dict[str, Tensor],
+        task_ids: Tensor | None,
+        rows: Tensor,
+        dists: Tensor,
+        history: Tensor | None,
+    ) -> None:
+        """Record what the retry, history and stickiness terms of the next retrievals need."""
         cfg = self.config
-        if slots is not None and (cfg.retry_distance_threshold > 0 or cfg.retry_stuck_steps > 0):
-            top_eps = self.key_episode[rows[:, 0]].tolist()
-            for slot, ep in zip(slots, top_eps, strict=True):
-                slot.followed.append(ep)
+        top = rows[:, 0]
+        if cfg.retry_distance_threshold > 0 or cfg.retry_stuck_steps > 0:
+            for slot, episode in zip(slots, self.key_episode[top].tolist(), strict=True):
+                slot.followed.append(episode)
                 while len(slot.followed) > cfg.retry_backtrack_steps:
                     slot.followed.popleft()
-        if slots is not None and cfg.retry_distance_threshold > 0:
+        if cfg.retry_distance_threshold > 0:
             calib = self.task_distance_scale()
             scale = calib[task_ids] if task_ids is not None else calib.median().expand(len(slots))
             # history matching adds to the distance; compare observation-only distances with the calibration
             obs_top1 = dists[:, 0] - (history.gather(1, rows[:, :1])[:, 0] if history is not None else 0.0)
-            for slot, nd in zip(slots, (obs_top1 / scale).tolist(), strict=True):
-                slot.unseen_streak = slot.unseen_streak + 1 if nd > cfg.retry_distance_threshold else 0
-        if slots is not None and self.config.history_weight > 0:
+            for slot, novelty in zip(slots, (obs_top1 / scale).tolist(), strict=True):
+                slot.unseen_streak = slot.unseen_streak + 1 if novelty > cfg.retry_distance_threshold else 0
+        if cfg.history_weight > 0:
             for r, slot in enumerate(slots):
                 slot.prev_query = {name: v[r] for name, v in query.items()}
                 slot.prev_t = slot.t
-                if self.config.history_gap > 0:
+                if cfg.history_gap > 0:
                     slot.past.append((slot.t, slot.prev_query))
-                    while len(slot.past) > 1 and slot.past[1][0] <= slot.t - self.config.history_gap:
+                    while len(slot.past) > 1 and slot.past[1][0] <= slot.t - cfg.history_gap:
                         slot.past.popleft()
-        if slots is not None and self.config.consistency_weight > 0:
-            top = rows[:, 0]
+        if cfg.consistency_weight > 0:
             matches = torch.stack([self.key_episode[top], self.key_frame[top]], 1).tolist()
-            for slot, (ep, fr) in zip(slots, matches, strict=True):
-                slot.last_match = (ep, fr, slot.t)
-        query_state = batch[OBS_STATE].to(self.device) if self.config.relative_action_dims else None
-        return self.aggregate(rows, weights, query_state)
+            for slot, (episode, frame) in zip(slots, matches, strict=True):
+                slot.last_match = (episode, frame, slot.t)
 
     @staticmethod
     def _batch_size(batch: dict[str, Any]) -> int:
@@ -665,11 +675,14 @@ class KNNPolicy(PreTrainedPolicy):
                 out[key] = value
         return out
 
+    def _env_ids(self, batch: dict[str, Any], kwargs: dict[str, Any]) -> list[int]:
+        """The ``env_ids`` a caller passed, else the batch positions."""
+        env_ids = kwargs.get("env_ids")
+        return list(env_ids) if env_ids is not None else list(range(self._batch_size(batch)))
+
     @torch.no_grad()
     def predict_action_chunk(self, batch: dict[str, Any], **kwargs: Any) -> Tensor:
-        env_ids = kwargs.get("env_ids")
-        b = self._batch_size(batch)
-        ids = list(env_ids) if env_ids is not None else list(range(b))
+        ids = self._env_ids(batch, kwargs)
         t = self._as_device_tensor([self._slots[i].t if i in self._slots else 0 for i in ids])
         return self._predict(batch, t)
 
@@ -679,12 +692,10 @@ class KNNPolicy(PreTrainedPolicy):
         the batch position), so callers may run envs asynchronously and reset them independently."""
         self.eval()
         cfg = self.config
-        env_ids = kwargs.get("env_ids")
         b = self._batch_size(batch)
-        ids = list(env_ids) if env_ids is not None else list(range(b))
-        slots = [self._slots.setdefault(i, _EnvSlot()) for i in ids]
+        slots = [self._slots.setdefault(i, _EnvSlot()) for i in self._env_ids(batch, kwargs)]
         ensemble = cfg.temporal_ensemble_coeff is not None
-        need = [r for r, s in enumerate(slots) if not s.backtrack and (ensemble or not s.queue)]
+        need = [r for r, slot in enumerate(slots) if self._needs_retrieval(slot)]
         retry = cfg.retry_distance_threshold > 0 or cfg.retry_stuck_steps > 0
         if retry and cfg.retry_stuck_steps > 0 and need and OBS_STATE in batch:
             pos = batch[OBS_STATE][:, :3].detach().float().cpu()

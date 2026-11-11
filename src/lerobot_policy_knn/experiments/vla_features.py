@@ -21,131 +21,149 @@ from numpy.lib.format import open_memmap
 from lerobot.datasets import LeRobotDatasetMetadata
 from lerobot.utils.constants import OBS_STATE
 
-from ..features import DEFAULT_CACHE_DIR, _cache_root, _episode_video_layout, load_frame_index
-from ..vla import DATASET_CAMERAS, VLAEmbedder, cache_tag
+from ..features import DEFAULT_CACHE_DIR, FrameIndex, cache_root, episode_video_layout, load_frame_index
+from ..vla import DATASET_CAMERAS, VLA_CAMERA, VLAEmbedder, cache_tag
+from .common import REPO_ID
 
 logger = logging.getLogger(__name__)
-REPO_ID = "lerobot/libero"
 
 
-def _decode_worker(meta, frames, rows, out_q, stop):
-    """Yield (global rows, {camera: uint8 (n, 3, H, W)}) per episode, in dataset order."""
+def _decode_worker(
+    meta: LeRobotDatasetMetadata,
+    frames: FrameIndex,
+    rows: np.ndarray,
+    out: queue.Queue,
+    stop: threading.Event,
+) -> None:
+    """Put (global rows, {camera: uint8 (n, 3, H, W)}) per episode on ``out``, in dataset order, then ``None``."""
     from torchcodec.decoders import VideoDecoder
 
-    layouts = {}
+    # camera -> first global index of an episode -> (video file, the episode's first frame in it)
+    location: dict[str, dict[int, tuple[int, int]]] = {}
     for cam in DATASET_CAMERAS:
-        where = {}
-        for file_index, eps in _episode_video_layout(meta, cam).items():
-            for start, gfrom, length in eps:
-                where[gfrom] = (file_index, start, length)
-        layouts[cam] = where
-    decoders: dict[str, tuple[int, VideoDecoder]] = {}
-    starts = np.nonzero(frames.frame_index == 0)[0]  # global index of every episode's first frame
-    by_ep = np.searchsorted(starts, rows, side="right") - 1
-    for e in np.unique(by_ep):
+        location[cam] = {
+            first_row: (file_index, start)
+            for file_index, episodes in episode_video_layout(meta, cam).items()
+            for start, first_row, _length in episodes
+        }
+    decoders: dict[str, tuple[int, VideoDecoder]] = {}  # camera -> (open file, its decoder)
+    episode_starts = np.nonzero(frames.frame_index == 0)[0]
+    episode_of_row = np.searchsorted(episode_starts, rows, side="right") - 1
+    for episode in np.unique(episode_of_row):
         if stop.is_set():
             return
-        ep_rows = rows[by_ep == e]
-        gfrom = int(starts[e])
-        imgs = {}
+        episode_rows = rows[episode_of_row == episode]
+        first_row = int(episode_starts[episode])
+        images = {}
         for cam in DATASET_CAMERAS:
-            file_index, start, _length = layouts[cam][gfrom]
-            cur = decoders.get(cam)
-            if cur is None or cur[0] != file_index:
+            file_index, start = location[cam][first_row]
+            if cam not in decoders or decoders[cam][0] != file_index:
                 video = meta.root / f"videos/{cam}/chunk-000/file-{file_index:03d}.mp4"
                 decoders[cam] = (file_index, VideoDecoder(str(video), device="cpu"))
-            local = (ep_rows - gfrom + start).tolist()
-            imgs[cam] = decoders[cam][1].get_frames_at(indices=local).data
-        out_q.put((ep_rows, imgs))
-    out_q.put(None)
+            in_file = (episode_rows - first_row + start).tolist()
+            images[cam] = decoders[cam][1].get_frames_at(indices=in_file).data
+        out.put((episode_rows, images))
+    out.put(None)
 
 
 @torch.no_grad()
-def extract(name: str, stride: int = 2, batch_size: int = 64, cache_dir: Path = DEFAULT_CACHE_DIR,
-            poolings: tuple[str, ...] | None = None, device: str = "cuda", overwrite: bool = False,
-            taps: tuple[str, ...] = (), tasks: list[int] | None = None, tag_suffix: str = "") -> Path:  # fmt: skip
+def extract(
+    name: str,
+    stride: int = 2,
+    batch_size: int = 64,
+    cache_dir: Path = DEFAULT_CACHE_DIR,
+    poolings: tuple[str, ...] | None = None,
+    device: str = "cuda",
+    overwrite: bool = False,
+    taps: tuple[str, ...] = (),
+    tasks: list[int] | None = None,
+    tag_suffix: str = "",
+) -> Path:
+    """Cache the pooled hidden states of VLA ``name`` for every ``stride``-th frame; returns the cache directory."""
     frames = load_frame_index(REPO_ID, cache_dir=cache_dir)
     meta = LeRobotDatasetMetadata(REPO_ID)
-    root = _cache_root(cache_dir, REPO_ID) / (cache_tag(name) + tag_suffix)
-    wanted = poolings
+    root = cache_root(cache_dir, REPO_ID) / (cache_tag(name) + tag_suffix)
     if (root / "rows.npy").exists() and not overwrite:
-        have = {f.name.split(".")[-2] for f in root.glob("*.npy") if f.name != "rows.npy"}
-        if wanted is None or set(wanted) <= have:
+        cached = {f.name.split(".")[-2] for f in root.glob("*.npy") if f.name != "rows.npy"}
+        if poolings is None or set(poolings) <= cached:
             logger.info("%s already cached at %s", name, root)
             return root
     keep = frames.frame_index % stride == 0
     if tasks is not None:  # a subset of tasks (pilot studies)
         keep &= np.isin(frames.task_index, tasks)
     rows = np.nonzero(keep)[0]
-    emb = VLAEmbedder(name, device=device, taps=taps)
-    poolings = poolings or emb.poolings
+    embedder = VLAEmbedder(name, device=device, taps=taps)
+    poolings = poolings or embedder.poolings
     root.mkdir(parents=True, exist_ok=True)
+    # one compact array per (pooling, camera); prompt-level poolings live under the pseudo camera
     outs: dict[tuple[str, str], np.memmap] = {}
-    for p in poolings:
-        cams = emb.present if p in ("img", "grid2") or p.startswith("grid2@") else ["observation.vla"]
-        dim = emb.hidden_size * (4 if p.startswith("grid2") else 1)
-        for cam in cams:
-            outs[(p, cam)] = open_memmap(
-                str(root / f"{cam}.{p}.tmp.npy"), mode="w+", dtype=np.float16, shape=(len(rows), dim)
-            )
-    pos = {int(r): i for i, r in enumerate(rows)}
-    q: queue.Queue = queue.Queue(maxsize=8)
-    stop = threading.Event()
-    th = threading.Thread(target=_decode_worker, args=(meta, frames, rows, q, stop), daemon=True)
-    th.start()
-    buf_rows: list[np.ndarray] = []
-    buf_imgs: dict[str, list[torch.Tensor]] = {c: [] for c in DATASET_CAMERAS}
-    done, t0, last_log = 0, time.time(), 0.0
+    for pooling in poolings:
+        per_camera = pooling in ("img", "grid2") or pooling.startswith("grid2@")
+        dim = embedder.hidden_size * (4 if pooling.startswith("grid2") else 1)
+        for cam in embedder.present if per_camera else [VLA_CAMERA]:
+            path = root / f"{cam}.{pooling}.tmp.npy"
+            outs[(pooling, cam)] = open_memmap(str(path), mode="w+", dtype=np.float16, shape=(len(rows), dim))
+    position = {int(r): i for i, r in enumerate(rows)}
 
-    def embed(model: VLAEmbedder, r: np.ndarray, imgs: dict[str, torch.Tensor]) -> None:
-        batch = {c: imgs[c].to(device, non_blocking=True).float().div_(255.0) for c in DATASET_CAMERAS}
-        batch[OBS_STATE] = torch.from_numpy(frames.state[r]).float().to(device)
-        batch["task"] = [frames.task_names[int(t)] for t in frames.task_index[r]]
+    def embed(model: VLAEmbedder, batch_rows: np.ndarray, images: dict[str, torch.Tensor]) -> None:
+        batch = {c: images[c].to(device, non_blocking=True).float().div_(255.0) for c in DATASET_CAMERAS}
+        batch[OBS_STATE] = torch.from_numpy(frames.state[batch_rows]).float().to(device)
+        batch["task"] = [frames.task_names[int(t)] for t in frames.task_index[batch_rows]]
         feats = model(batch)
-        idx = np.array([pos[int(x)] for x in r])
-        for (p, cam), arr in outs.items():
-            arr[idx] = feats[p][cam].half().cpu().numpy()
+        index = np.array([position[int(r)] for r in batch_rows])
+        for (pooling, cam), array in outs.items():
+            array[index] = feats[pooling][cam].half().cpu().numpy()
 
+    # a thread decodes whole episodes; they are regrouped here into batches of batch_size frames
+    decoded: queue.Queue = queue.Queue(maxsize=8)
+    stop = threading.Event()
+    threading.Thread(target=_decode_worker, args=(meta, frames, rows, decoded, stop), daemon=True).start()
+    pending_rows: list[np.ndarray] = []
+    pending_images: dict[str, list[torch.Tensor]] = {c: [] for c in DATASET_CAMERAS}
+    done, t0, last_log = 0, time.time(), 0.0
     try:
         finished = False
         while not finished:
-            item = q.get()
+            item = decoded.get()
             if item is None:
                 finished = True
             else:
-                buf_rows.append(item[0])
+                pending_rows.append(item[0])
                 for c in DATASET_CAMERAS:
-                    buf_imgs[c].append(item[1][c])
-            n_buf = sum(len(x) for x in buf_rows)
-            if n_buf < batch_size and not (finished and n_buf):
+                    pending_images[c].append(item[1][c])
+            n_pending = sum(len(x) for x in pending_rows)
+            if n_pending < batch_size and not (finished and n_pending):
                 continue
-            allr = np.concatenate(buf_rows)
-            alli = {c: torch.cat(buf_imgs[c]) for c in DATASET_CAMERAS}
-            n_full = len(allr) if finished else (len(allr) // batch_size) * batch_size
+            all_rows = np.concatenate(pending_rows)
+            all_images = {c: torch.cat(pending_images[c]) for c in DATASET_CAMERAS}
+            n_full = len(all_rows) if finished else (len(all_rows) // batch_size) * batch_size
             for s in range(0, n_full, batch_size):
                 e = min(s + batch_size, n_full)
-                embed(emb, allr[s:e], {c: alli[c][s:e] for c in DATASET_CAMERAS})
+                embed(embedder, all_rows[s:e], {c: all_images[c][s:e] for c in DATASET_CAMERAS})
             done += n_full
-            buf_rows[:] = [allr[n_full:]] if n_full < len(allr) else []
+            leftover = n_full < len(all_rows)
+            pending_rows[:] = [all_rows[n_full:]] if leftover else []
             for c in DATASET_CAMERAS:
-                buf_imgs[c][:] = [alli[c][n_full:]] if n_full < len(allr) else []
+                pending_images[c][:] = [all_images[c][n_full:]] if leftover else []
             if time.time() - last_log > 60:
                 last_log = time.time()
                 rate = done / (time.time() - t0)
-                logger.info("%s: %d/%d rows (%.0f rows/s, eta %.0f min)", name, done, len(rows), rate,
-                            (len(rows) - done) / max(rate, 1e-6) / 60)  # fmt: skip
+                eta_min = (len(rows) - done) / max(rate, 1e-6) / 60
+                logger.info(
+                    "%s: %d/%d rows (%.0f rows/s, eta %.0f min)", name, done, len(rows), rate, eta_min
+                )
     finally:
         stop.set()
     if done != len(rows):
         raise RuntimeError(f"Embedded {done} of {len(rows)} rows")
-    for (p, cam), arr in outs.items():
-        arr.flush()
-        tmp = Path(arr.filename)
-        del arr
-        tmp.rename(root / f"{cam}.{p}.npy")
+    for (pooling, cam), array in outs.items():
+        array.flush()
+        tmp = Path(array.filename)
+        del array
+        tmp.rename(root / f"{cam}.{pooling}.npy")
     np.save(root / "rows.npy", rows)
     logger.info("%s: %d rows in %.1f min -> %s", name, len(rows), (time.time() - t0) / 60, root)
-    del emb
+    del embedder
     torch.cuda.empty_cache()
     return root
 
@@ -164,12 +182,17 @@ def main() -> None:
     parser.add_argument("--tasks", default=None, help="dataset task indices, e.g. 0,5,12 (pilot subsets)")
     parser.add_argument("--tag_suffix", default="", help="cache directory suffix, e.g. _pilot")
     args = parser.parse_args()
-    pools = tuple(args.poolings.split(",")) if args.poolings else None
-    taps = tuple(t for t in args.taps.split(",") if t)
-    tasks = [int(t) for t in args.tasks.split(",")] if args.tasks else None
-    for n in args.names:
-        extract(n, args.stride, args.batch_size, poolings=pools, overwrite=args.overwrite, taps=taps, tasks=tasks,
-                tag_suffix=args.tag_suffix)  # fmt: skip
+    for name in args.names:
+        extract(
+            name,
+            args.stride,
+            args.batch_size,
+            poolings=tuple(args.poolings.split(",")) if args.poolings else None,
+            overwrite=args.overwrite,
+            taps=tuple(t for t in args.taps.split(",") if t),
+            tasks=[int(t) for t in args.tasks.split(",")] if args.tasks else None,
+            tag_suffix=args.tag_suffix,
+        )
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
-# "Your VLA is Secretly kNN": experiment notes
+# "How Much of Your VLA is kNN": experiment notes
 
-The notes cover the experiments behind the `lerobot_policy_knn` plugin, the A1 poster (`poster/`) and the CoRL 2026
+The notes cover the experiments behind the `lerobot_policy_knn` plugin, the poster (`poster/corl2026/`) and the CoRL 2026
 workshop paper (`paper/`): what was run, how, and what came out. Numbers are copied from the result files named in
 each section. The poster and the paper are regenerated from those same files by `make` in their directories.
 
@@ -80,6 +80,6 @@ The full results table (12 policies × LIBERO and LIBERO-plus) and the backbone 
 | VLA results (local) | `outputs/vla/results.jsonl`, `results_episodes.jsonl`, `neighbor_metric*.json`, `hub_sanity.json`, `head_vs_knn_*.json` |
 | LIBERO-plus (local) | `outputs/libero_plus/` (venv, fork, `sample.json`, `results*.jsonl`) |
 | Everything the poster and paper show | `poster/data/poster_data.json` (tracked), built by `poster/scripts/prepare_data.py` |
-| Poster, paper | `poster/`, `paper/` (`make` rebuilds data, figures, `numbers.tex` and the PDF) |
+| Poster, paper | `poster/corl2026/`, `paper/` (`make` rebuilds data, figures, `numbers.tex` and the PDF) |
 
 Result files under `outputs/` are not in git; only the configurations are.

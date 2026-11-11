@@ -57,13 +57,18 @@ TEXT_ENCODERS: dict[str, str] = {
 }
 
 
-def _grid_pool(patches: Tensor, grid: int) -> Tensor:
-    """(B, P, D) square patch tokens -> (B, grid*grid, D) average-pooled cells."""
+def grid_pool(patches: Tensor, grid: int, shape: tuple[int, int] | None = None) -> Tensor:
+    """(B, P, D) patch tokens -> (B, grid*grid, D) average-pooled cells.
+
+    The tokens form a ``shape`` = (height, width) grid in row-major order; a square grid by default.
+    """
     b, p, d = patches.shape
-    side = int(round(p**0.5))
-    if side * side != p:
-        raise ValueError(f"Expected a square patch grid, got {p} tokens")
-    fmap = patches.transpose(1, 2).reshape(b, d, side, side)
+    if shape is None:
+        side = int(round(p**0.5))
+        shape = (side, side)
+    if shape[0] * shape[1] != p:
+        raise ValueError(f"Expected a {shape[0]}x{shape[1]} patch grid, got {p} tokens")
+    fmap = patches.transpose(1, 2).reshape(b, d, *shape)
     return F.adaptive_avg_pool2d(fmap, grid).flatten(2).transpose(1, 2)
 
 
@@ -145,7 +150,7 @@ class ImageEncoder(nn.Module):
             elif pooling == "mean":
                 feats["mean"] = patches.mean(1)
             elif pooling.startswith("grid"):
-                feats[pooling] = _grid_pool(patches, int(pooling[4:])).flatten(1)
+                feats[pooling] = grid_pool(patches, int(pooling[4:])).flatten(1)
             else:
                 raise ValueError(f"Unknown pooling '{pooling}'")
         return feats
@@ -163,11 +168,25 @@ def finalize_features(raw: Tensor, pooling: str) -> Tensor:
         cells = int(pooling.split("@")[0][4:]) ** 2
         if "@" in pooling:  # "grid2@L12+L15+last": one block of cells per layer
             cells *= len(pooling.split("@", 1)[1].split("+"))
-        b = raw.shape[0]
-        per_cell = raw.view(b, cells, -1)
-        per_cell = F.normalize(per_cell, dim=-1)
+        per_cell = F.normalize(raw.view(len(raw), cells, -1), dim=-1)
         return per_cell.flatten(1) / cells**0.5
     return F.normalize(raw, dim=-1)
+
+
+def normalize_keys(
+    raw: Tensor, pooling: str, mean: Tensor | None, std: Tensor | None, proj: Tensor | None
+) -> Tensor:
+    """Unit-norm retrieval keys from raw features and the statistics of a ``key_norm`` (``memory.fit_key_norm``).
+
+    ``mean`` / ``std`` standardise every raw dimension; ``proj`` then maps the result to the key space (a whitened PCA
+    or a learnt key). Without a projection the keys are :func:`finalize_features` of the standardised features.
+    """
+    raw = raw.float()
+    if mean is not None:
+        raw = (raw - mean) / std
+    if proj is not None:
+        return F.normalize(raw @ proj, dim=-1)
+    return finalize_features(raw, pooling)
 
 
 class TextEncoder(nn.Module):

@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_CACHE_DIR = Path("outputs/knn/feature_cache")
 
 
-def _cache_root(cache_dir: Path | str, repo_id: str) -> Path:
+def cache_root(cache_dir: Path | str, repo_id: str) -> Path:
+    """Directory holding everything cached for one dataset."""
     return Path(cache_dir) / repo_id.replace("/", "__")
 
 
@@ -53,14 +54,12 @@ class FrameIndex:
 def load_frame_index(
     repo_id: str, root: str | Path | None = None, cache_dir: Path | str = DEFAULT_CACHE_DIR
 ) -> FrameIndex:
-    cache = _cache_root(cache_dir, repo_id) / "frame_index.npz"
+    """The dataset's :class:`FrameIndex`, read from its parquet files once and cached as ``frame_index.npz``."""
+    cache = cache_root(cache_dir, repo_id) / "frame_index.npz"
     if cache.exists():
         data = np.load(cache, allow_pickle=False)
-        names = json.loads(str(data["task_names"]))
-        return FrameIndex(
-            **{k: data[k] for k in data.files if k != "task_names"},
-            task_names=names,
-        )
+        arrays = {k: data[k] for k in data.files if k != "task_names"}
+        return FrameIndex(**arrays, task_names=json.loads(str(data["task_names"])))
 
     meta = LeRobotDatasetMetadata(repo_id, root=root)
     files = sorted((meta.root / "data").glob("*/*.parquet"))
@@ -72,9 +71,8 @@ def load_frame_index(
     episode_index = df["episode_index"].to_numpy().astype(np.int64)
     ep_len = df.groupby("episode_index")["frame_index"].transform("count").to_numpy().astype(np.int64)
     ep_start = df.groupby("episode_index")["index"].transform("min").to_numpy().astype(np.int64)
-    tasks = meta.tasks
-    task_names = [""] * len(tasks)
-    for name, row in tasks.iterrows():
+    task_names = [""] * len(meta.tasks)
+    for name, row in meta.tasks.iterrows():
         task_names[int(row["task_index"])] = str(name)
     fi = FrameIndex(
         state=np.stack(df["observation.state"].to_numpy()).astype(np.float32),
@@ -87,17 +85,7 @@ def load_frame_index(
         task_names=task_names,
     )
     cache.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        cache,
-        state=fi.state,
-        action=fi.action,
-        episode_index=fi.episode_index,
-        frame_index=fi.frame_index,
-        task_index=fi.task_index,
-        episode_end=fi.episode_end,
-        episode_length=fi.episode_length,
-        task_names=np.array(json.dumps(task_names)),
-    )
+    np.savez(cache, **{**asdict(fi), "task_names": np.array(json.dumps(task_names))})
     return fi
 
 
@@ -107,12 +95,13 @@ def feature_path(
     if encoder.startswith("vla:"):
         from .vla import cache_tag
 
-        return _cache_root(cache_dir, repo_id) / cache_tag(encoder[4:]) / f"{camera}.{pooling}.npy"
-    tag = encoder if resolution == 224 else f"{encoder}@{resolution}"
-    return _cache_root(cache_dir, repo_id) / tag / f"{camera}.{pooling}.npy"
+        tag = cache_tag(encoder.removeprefix("vla:"))
+    else:
+        tag = encoder if resolution == 224 else f"{encoder}@{resolution}"
+    return cache_root(cache_dir, repo_id) / tag / f"{camera}.{pooling}.npy"
 
 
-def _episode_video_layout(meta: LeRobotDatasetMetadata, camera: str) -> dict[int, list[tuple[int, int, int]]]:
+def episode_video_layout(meta: LeRobotDatasetMetadata, camera: str) -> dict[int, list[tuple[int, int, int]]]:
     """file_index -> list of (first_frame_in_file, global_from_index, length), one per episode."""
     eps = meta.episodes.to_pandas()
     layout: dict[int, list[tuple[int, int, int]]] = {}
@@ -168,7 +157,7 @@ def extract_features(
         if not todo:
             continue
 
-        layout = _episode_video_layout(meta, camera)
+        layout = episode_video_layout(meta, camera)
         written = np.zeros(n_total, dtype=bool)
         t0 = time.time()
         for file_index in sorted(layout):

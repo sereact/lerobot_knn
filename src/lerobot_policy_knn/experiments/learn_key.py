@@ -21,121 +21,124 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 
 from ..features import DEFAULT_CACHE_DIR, load_features, load_frame_index
+from ..vla import DATASET_CAMERAS
+from .common import MOTION, REPO_ID, SPLIT, VLA_OUT, action_chunks
 
-CAMS = ("observation.images.image", "observation.images.image2")
-CELLS, CH = 16, 256
+CELLS, CHANNELS = 16, 256  # ResNet-18 layer 3, pooled to a 4x4 grid
+HORIZON = 10
 
 
 class CellKey(torch.nn.Module):
+    """One linear map per camera, shared by its grid cells; the key is the unit-normalised concatenation."""
+
     def __init__(self, dim_out: int = 128):
         super().__init__()
         self.w = torch.nn.ParameterList(
-            [torch.nn.Parameter(torch.eye(CH, dim_out) + 0.01 * torch.randn(CH, dim_out)) for _ in CAMS]
+            [
+                torch.nn.Parameter(torch.eye(CHANNELS, dim_out) + 0.01 * torch.randn(CHANNELS, dim_out))
+                for _ in DATASET_CAMERAS
+            ]
         )
-        self.log_tau = torch.nn.Parameter(torch.tensor(-2.3))
+        self.log_tau = torch.nn.Parameter(torch.tensor(-2.3))  # log temperature of the soft kNN
 
     def forward(self, xs: list[torch.Tensor]) -> list[torch.Tensor]:
         return [
-            F.normalize((x.view(len(x), CELLS, CH) @ w).flatten(1), dim=-1)
+            F.normalize((x.view(len(x), CELLS, CHANNELS) @ w).flatten(1), dim=-1)
             for x, w in zip(xs, self.w, strict=True)
         ]
 
 
-def dist(qa: list[torch.Tensor], ca: list[torch.Tensor]) -> torch.Tensor:
-    return sum(2 - 2 * q @ c.T for q, c in zip(qa, ca, strict=True)) / len(qa)
+def raw_key(x: torch.Tensor) -> torch.Tensor:
+    """The baseline key: per-cell unit norm of the (standardised) ResNet grid, what the policy uses."""
+    return F.normalize(x.float().view(len(x), CELLS, CHANNELS), dim=-1).flatten(1) / CELLS**0.5
+
+
+def distance(queries: list[torch.Tensor], candidates: list[torch.Tensor]) -> torch.Tensor:
+    """(Q, C) mean over cameras of the squared distance between unit-norm keys."""
+    return sum(2 - 2 * q @ c.T for q, c in zip(queries, candidates, strict=True)) / len(queries)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=3000)
     parser.add_argument("--dim", type=int, default=128)
-    parser.add_argument("--out", default="outputs/vla/learned_key_resnet.pt")
+    parser.add_argument("--out", default=str(VLA_OUT / "learned_key_resnet.pt"))
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
     dev = args.device
     torch.manual_seed(0)
-    f = load_frame_index("lerobot/libero")
-    split = json.loads(Path("outputs/vla/split.json").read_text())
-    train_eps, held_eps = np.array(split["train"]), np.array(split["heldout"])
-    mem = np.nonzero(f.frame_index % 2 == 0)[0]
-    tr = mem[np.isin(f.episode_index[mem], train_eps)]
-    xs = [torch.from_numpy(np.asarray(load_features(DEFAULT_CACHE_DIR, "lerobot/libero", "resnet18_l3", c, "grid4")[mem]))
-          for c in CAMS]  # fmt: skip
-    pos = np.full(len(f.frame_index), -1)
-    pos[mem] = np.arange(len(mem))
-    stats = []
-    for i, x in enumerate(xs):
-        xt = x[torch.from_numpy(pos[tr])].float()
-        mean, std = xt.mean(0), xt.std(0).clamp_min(1e-3)
+    frames = load_frame_index(REPO_ID)
+    split = json.loads(SPLIT.read_text())
+    memory = np.nonzero(frames.frame_index % 2 == 0)[0]
+    in_train = np.isin(frames.episode_index[memory], split["train"])
+    in_heldout = np.isin(frames.episode_index[memory], split["heldout"])
+
+    # standardised raw features of every memory frame, with the statistics of the training demos
+    xs, stats = [], []
+    for cam in DATASET_CAMERAS:
+        raw = load_features(DEFAULT_CACHE_DIR, REPO_ID, "resnet18_l3", cam, "grid4")
+        x = torch.from_numpy(np.asarray(raw[memory]))
+        x_train = x[torch.from_numpy(np.nonzero(in_train)[0])].float()
+        mean, std = x_train.mean(0), x_train.std(0).clamp_min(1e-3)
         stats.append((mean, std))
-        xs[i] = ((x.float() - mean) / std).half().to(dev)
-    act, end = torch.from_numpy(f.action), torch.from_numpy(f.episode_end)
-    chunk = act[torch.minimum(torch.from_numpy(mem)[:, None] + torch.arange(10), end[mem][:, None])][..., :6]
-    chunk = chunk.reshape(len(mem), -1).to(dev)
-    task = torch.from_numpy(f.task_index[mem]).to(dev)
-    ep = torch.from_numpy(f.episode_index[mem]).to(dev)
-    is_train = torch.from_numpy(np.isin(f.episode_index[mem], train_eps)).to(dev)
-    is_held_q = torch.from_numpy(np.isin(f.episode_index[mem], held_eps) & (f.frame_index[mem] % 10 == 4)).to(
-        dev
-    )
-    tasks = sorted(np.unique(f.task_index).tolist())
+        xs.append(((x.float() - mean) / std).half().to(dev))
+    motion = torch.from_numpy(action_chunks(frames, memory, HORIZON)[..., MOTION])
+    motion = motion.reshape(len(memory), -1).to(dev)
+    task = torch.from_numpy(frames.task_index[memory]).to(dev)
+    episode = torch.from_numpy(frames.episode_index[memory]).to(dev)
+    is_train = torch.from_numpy(in_train).to(dev)
+    is_heldout_query = torch.from_numpy(in_heldout & (frames.frame_index[memory] % 10 == 4)).to(dev)
+    tasks = sorted(np.unique(frames.task_index).tolist())
 
     model = CellKey(args.dim).to(dev)
     opt = torch.optim.Adam(model.parameters(), lr=3e-3)
 
+    def keys(rows: torch.Tensor, learnt: bool = True) -> list[torch.Tensor]:
+        return model([x[rows].float() for x in xs]) if learnt else [raw_key(x[rows]) for x in xs]
+
     @torch.no_grad()
-    def evaluate(use_model: bool) -> dict:
+    def evaluate(learnt: bool) -> dict:
+        """LAC@8 and kNN R² of the held-out demos' queries against the training demos."""
         lac, sse, sst = [], 0.0, 0.0
         for t in tasks:
-            c = torch.nonzero((task == t) & is_train).squeeze(1)
-            q = torch.nonzero((task == t) & is_held_q).squeeze(1)
-            if len(q) == 0:
+            cand = torch.nonzero((task == t) & is_train).squeeze(1)
+            queries = torch.nonzero((task == t) & is_heldout_query).squeeze(1)
+            if len(queries) == 0:
                 continue
-            if use_model:
-                kc, kq = model([x[c].float() for x in xs]), model([x[q].float() for x in xs])
-            else:  # the baseline key: per-cell unit norm of the raw ResNet grid (what the policy uses)
-
-                def norm(z: torch.Tensor) -> torch.Tensor:
-                    return F.normalize(z.float().view(len(z), CELLS, CH), dim=-1).flatten(1) / CELLS**0.5
-
-                kc, kq = [norm(x[c]) for x in xs], [norm(x[q]) for x in xs]
-            d = dist(kq, kc)
-            dd, idx = d.topk(8, largest=False)
-            da = torch.cdist(chunk[q], chunk[c]).pow(2) / chunk.shape[1]
-            lac.append(1 - da.gather(1, idx).mean(1) / da.mean(1))
-            w = torch.softmax(-dd / (0.1 * dd.mean(1, keepdim=True)), 1)
-            pred = (w[..., None] * chunk[c][idx]).sum(1)
-            sse += float(((pred - chunk[q]) ** 2).sum())
-            sst += float(((chunk[q] - chunk[q].mean(0)) ** 2).sum())
+            nearest, idx = distance(keys(queries, learnt), keys(cand, learnt)).topk(8, largest=False)
+            d_a = torch.cdist(motion[queries], motion[cand]).pow(2) / motion.shape[1]
+            lac.append(1 - d_a.gather(1, idx).mean(1) / d_a.mean(1))
+            weights = torch.softmax(-nearest / (0.1 * nearest.mean(1, keepdim=True)), 1)
+            pred = (weights[..., None] * motion[cand][idx]).sum(1)
+            sse += float(((pred - motion[queries]) ** 2).sum())
+            sst += float(((motion[queries] - motion[queries].mean(0)) ** 2).sum())
         return {"lac@8": float(torch.cat(lac).mean()), "r2": 1 - sse / sst}
 
-    before = evaluate(False)
+    before = evaluate(learnt=False)
     print("raw ResNet key (held-out demos):", before, flush=True)
     for step in range(args.steps):
-        t = tasks[step % len(tasks)]
-        pool = torch.nonzero((task == t) & is_train).squeeze(1)
-        q = pool[torch.randperm(len(pool), device=dev)[:256]]
-        c = pool[torch.randperm(len(pool), device=dev)[:2048]]
-        kq, kc = model([x[q].float() for x in xs]), model([x[c].float() for x in xs])
-        logits = -dist(kq, kc) / model.log_tau.exp()
-        logits = logits.masked_fill(
-            ep[q][:, None] == ep[c][None, :], float("-inf")
-        )  # neighbours from other demos only
-        pred = torch.softmax(logits, 1) @ chunk[c]
-        loss = F.mse_loss(pred, chunk[q])
+        pool = torch.nonzero((task == tasks[step % len(tasks)]) & is_train).squeeze(1)
+        queries = pool[torch.randperm(len(pool), device=dev)[:256]]
+        cand = pool[torch.randperm(len(pool), device=dev)[:2048]]
+        logits = -distance(keys(queries), keys(cand)) / model.log_tau.exp()
+        # neighbours from other demos only
+        logits = logits.masked_fill(episode[queries][:, None] == episode[cand][None, :], float("-inf"))
+        loss = F.mse_loss(torch.softmax(logits, 1) @ motion[cand], motion[queries])
         opt.zero_grad()
         loss.backward()
         opt.step()
         if step % 500 == 0 or step == args.steps - 1:
-            print(f"step {step} loss {loss.item():.5f} tau {model.log_tau.exp().item():.4f} held-out {evaluate(True)}",
-                  flush=True)  # fmt: skip
-    after = evaluate(True)
+            print(
+                f"step {step} loss {loss.item():.5f} tau {model.log_tau.exp().item():.4f} "
+                f"held-out {evaluate(learnt=True)}",
+                flush=True,
+            )
+    after = evaluate(learnt=True)
     # dense block-diagonal projection per camera: key = normalize(standardised raw @ proj), as the kNN policy expects
     state = {}
-    for i, cam in enumerate(CAMS):
-        w = model.w[i].detach().float().cpu()
-        proj = torch.block_diag(*[w] * CELLS)
-        state[cam] = {"mean": stats[i][0], "std": stats[i][1], "proj": proj}
+    for cam, w, (mean, std) in zip(DATASET_CAMERAS, model.w, stats, strict=True):
+        proj = torch.block_diag(*[w.detach().float().cpu()] * CELLS)
+        state[cam] = {"mean": mean, "std": std, "proj": proj}
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     torch.save({"cameras": state, "before": before, "after": after}, args.out)
     print("saved", args.out, "before", before, "after", after)

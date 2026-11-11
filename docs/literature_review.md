@@ -1,4 +1,4 @@
-# Literature review: "Your VLA is Secretly kNN"
+# Literature review: "How Much of Your VLA is kNN"
 
 What other work says about retrieval policies, memorisation in VLAs, what fine-tuning does to the VLM backbone, VLA
 interpretability, and offline evaluation, and where our probe sits. Collected 2026-10-03; every entry was checked

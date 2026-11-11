@@ -18,9 +18,8 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = next(
-    p for p in Path(__file__).resolve().parents if (p / "outputs").is_dir()
-)  # the root holding outputs/
+# the repository root: the first parent holding outputs/
+ROOT = next(p for p in Path(__file__).resolve().parents if (p / "outputs").is_dir())
 KNN = ROOT / "outputs/knn"
 VLA = ROOT / "outputs/vla"
 PLUS = ROOT / "outputs/libero_plus"
@@ -28,9 +27,8 @@ OUT = Path(__file__).resolve().parents[1] / "data" / "poster_data.json"
 MAPS_OUT = OUT.with_name("embedding_maps.json")  # the 2-D maps, kept compact in their own file
 
 SUITES = ["libero_spatial", "libero_object", "libero_goal", "libero_10"]
-PER_SUITE = {
-    "groot_libero": {s: f"groot_{s}" for s in SUITES}
-}  # merged name -> its checkpoint for each suite
+# a VLA released as one checkpoint per suite: merged name -> suite -> checkpoint
+PER_SUITE = {"groot_libero": {s: f"groot_{s}" for s in SUITES}}
 OFFICIAL_EVALS = {  # lerobot-eval runs (50 episodes per task, episode j = initial state j): policy id -> run dir
     "knn:00_base": "knn_v2_39_all50",
     "knn:full_resnet18_l3_learned": "knn_full_learned_all50",
@@ -81,13 +79,21 @@ def libero_plus() -> tuple[dict, dict, dict]:
     """LIBERO-plus success of every policy (overall, per category / level / suite), the control runs (the language
     variants' scenes with their original instruction), and every policy's per-episode success."""
     rows = read_jsonl(PLUS / "results.jsonl")
-    results = {r["policy"]: {k: v for k, v in r.items() if k not in ("tag", "policy", "time")}
-               for r in rows if r.get("tag") == "libero_plus"}  # fmt: skip
+    results = {
+        r["policy"]: {k: v for k, v in r.items() if k not in ("tag", "policy", "time")}
+        for r in rows
+        if r.get("tag") == "libero_plus"
+    }
     control = {r["policy"]: r["all"] for r in rows if r.get("tag") == "libero_plus_original_instruction"}
     episodes = [r for r in read_jsonl(PLUS / "results_episodes.jsonl") if r.get("tag") == "libero_plus"]
     for merged, by_suite in PER_SUITE.items():  # each per-suite checkpoint on its own suite's variants
-        eps = [r for r in episodes if r["policy"].startswith("vla:") and r["policy"][4:] in by_suite.values()
-               and merged_name(r["policy"][4:], r["suite"]) == merged]  # fmt: skip
+        eps = [
+            r
+            for r in episodes
+            if r["policy"].startswith("vla:")
+            and r["policy"][4:] in by_suite.values()
+            and merged_name(r["policy"][4:], r["suite"]) == merged
+        ]
         entry: dict = {"n_episodes": len(eps), "all": float(np.mean([r["success"] for r in eps]))}
         for field in ("category", "level", "suite"):
             for value in sorted({r[field] for r in eps}, key=str):
@@ -124,11 +130,8 @@ def optuna_summary(study: str = "knn_v2") -> dict:
     storage = f"sqlite:///{KNN / 'optuna.db'}"
 
     def complete(name: str) -> list:
-        return [
-            t
-            for t in optuna.load_study(study_name=name, storage=storage).trials
-            if t.state.name == "COMPLETE"
-        ]
+        trials = optuna.load_study(study_name=name, storage=storage).trials
+        return [t for t in trials if t.state.name == "COMPLETE"]
 
     imp = optuna.importance.get_param_importances(
         optuna.load_study(study_name=study, storage=storage),
@@ -149,9 +152,8 @@ def head_vs_knn() -> tuple[dict, dict]:
     """Per VLA, how well a lookup predicts its action chunks: clean LIBERO rollouts (every key space, references)
     and LIBERO-plus rollouts (R² at k = 8 per key space)."""
     clean: dict[str, dict] = {}
-    for path in sorted(
-        VLA.glob("head_vs_knn_*.json")
-    ):  # extra-space files (--no_references) merge into one entry
+    # several files may hold one VLA (extra key spaces, run with --no_references): they merge into one entry
+    for path in sorted(VLA.glob("head_vs_knn_*.json")):
         res = json.loads(path.read_text())
         entry = clean.setdefault(res["vla"], {"spaces": {}})
         entry["spaces"].update(res["spaces"])
@@ -160,8 +162,10 @@ def head_vs_knn() -> tuple[dict, dict]:
     plus = {}
     for path in sorted(PLUS.glob("head_vs_knn_*.json")):
         res = json.loads(path.read_text())
-        plus[res["vla"]] = {"vla_success": res.get("vla_success"),
-                            "r2_k8": {sp: v["8"]["vla_r2"] for sp, v in res["spaces"].items() if "8" in v}}  # fmt: skip
+        plus[res["vla"]] = {
+            "vla_success": res.get("vla_success"),
+            "r2_k8": {sp: v["8"]["vla_r2"] for sp, v in res["spaces"].items() if "8" in v},
+        }
     return clean, plus
 
 
@@ -198,11 +202,13 @@ def main() -> None:
         "suite": maps["suite"],
         "progress": [round(v, 2) for v in maps["progress"]],
         "spaces": {
-            name: {**{k: v for k, v in sp.items() if k not in ("pca", "tsne")},
-                   **{m: [[round(x, 2), round(y, 2)] for x, y in sp[m]] for m in ("pca", "tsne")}}
+            name: {
+                **{k: v for k, v in sp.items() if k not in ("pca", "tsne")},
+                **{m: [[round(x, 2), round(y, 2)] for x, y in sp[m]] for m in ("pca", "tsne")},
+            }
             for name, sp in maps["spaces"].items()
         },
-    }  # fmt: skip
+    }
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(data, indent=1))
     MAPS_OUT.write_text(json.dumps(embedding_maps, separators=(",", ":")))

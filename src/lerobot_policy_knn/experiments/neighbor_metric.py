@@ -25,10 +25,14 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ..features import DEFAULT_CACHE_DIR, load_features, load_frame_index
-from ..memory import fit_key_norm, normalize_keys
+from ..encoders import normalize_keys
+from ..features import DEFAULT_CACHE_DIR, FrameIndex, load_features, load_frame_index
+from ..memory import fit_key_norm
+from ..vla import DATASET_CAMERAS
+from .common import KNN_OUT, MOTION, REPO_ID, SPLIT, VLA_OUT, action_chunks, extra_keys, read_jsonl
 
-CAMS = ("observation.images.image", "observation.images.image2")
+LEARNT_KEY = "file:outputs/vla/learned_key_resnet.pt"
+PI05_MULTILAYER = "grid2@L12+L15+last"
 # key space -> (encoder, pooling, key_norm, closed-loop config stem of the plain lookup with that key)
 SPACES = {
     "ResNet-18 grid": ("resnet18_l3", "grid4", "none", "plain_resnet18_l3"),
@@ -45,36 +49,36 @@ SPACES = {
     "π0.5 LIBERO L12": ("vla:pi05_libero", "grid2@L12", "zscore", "plain_pi05_libero_grid2@L12_z"),
     "π0.5 LIBERO L15": ("vla:pi05_libero", "grid2@L15", "zscore", "plain_pi05_libero_grid2@L15_z"),
     "π0.5 base L12 PCA": ("vla:pi05_base", "grid2@L12", "zscore_pca512", "plain_pi05_base_grid2@L12_pca"),
-    "π0.5 base L12+L15+last PCA": ("vla:pi05_base", "grid2@L12+L15+last", "zscore_pca512",
-                                   "plain_pi05_base_grid2@L12+L15+last_pca"),
-    "π0.5 LIBERO L12 PCA": ("vla:pi05_libero", "grid2@L12", "zscore_pca512", "plain_pi05_libero_grid2@L12_pca"),
-    "π0.5 LIBERO L12+L15+last PCA": ("vla:pi05_libero", "grid2@L12+L15+last", "zscore_pca512",
-                                     "plain_pi05_libero_grid2@L12+L15+last_pca"),
-    "ResNet-18 grid (learnt key)": ("resnet18_l3", "grid4", "file:outputs/vla/learned_key_resnet.pt",
-                                   "plain_resnet18_l3_learned"),
+    "π0.5 base L12+L15+last PCA": (
+        "vla:pi05_base",
+        PI05_MULTILAYER,
+        "zscore_pca512",
+        f"plain_pi05_base_{PI05_MULTILAYER}_pca",
+    ),
+    "π0.5 LIBERO L12 PCA": (
+        "vla:pi05_libero",
+        "grid2@L12",
+        "zscore_pca512",
+        "plain_pi05_libero_grid2@L12_pca",
+    ),
+    "π0.5 LIBERO L12+L15+last PCA": (
+        "vla:pi05_libero",
+        PI05_MULTILAYER,
+        "zscore_pca512",
+        f"plain_pi05_libero_{PI05_MULTILAYER}_pca",
+    ),
+    "ResNet-18 grid (learnt key)": ("resnet18_l3", "grid4", LEARNT_KEY, "plain_resnet18_l3_learned"),
     "π0 base L12": ("vla:pi0_base", "grid2@L12", "zscore", "plain_pi0_base_grid2@L12_z"),
     "π0 LIBERO L12": ("vla:pi0_libero", "grid2@L12", "zscore", "plain_pi0_libero_grid2@L12_z"),
-}  # fmt: skip
-# keys whose weights never saw LIBERO actions (the learnt key only for held-out queries, see --heldout)
-NEVER_TRAINED_ON_LIBERO = (
-    "ResNet-18",
-    "DINOv2",
-    "SmolVLA base",
-    "π0.5 base",
-    "π0 base",
-)
+}
+# name prefixes of the keys whose weights never saw LIBERO actions (the learnt key only for held-out queries, see
+# --heldout)
+NEVER_TRAINED_ON_LIBERO = ("ResNet-18", "DINOv2", "SmolVLA base", "π0.5 base", "π0 base")
 
-
-def extra_keys() -> list[dict]:
-    """Backbone keys added after the layer pilots (outputs/vla/extra_keys.json, written by choose_keys)."""
-    path = Path("outputs/vla/extra_keys.json")
-    return json.loads(path.read_text())["keys"] if path.exists() else []
-
-
-for _k in extra_keys():
-    SPACES[_k["label"]] = (_k["encoder"], _k["pooling"], _k["norm"], _k["stem"])
-    if _k["fair"]:
-        NEVER_TRAINED_ON_LIBERO = (*NEVER_TRAINED_ON_LIBERO, _k["label"])
+# the backbones added after the layer pilots
+_EXTRA_KEYS = extra_keys()
+SPACES.update({k["label"]: (k["encoder"], k["pooling"], k["norm"], k["stem"]) for k in _EXTRA_KEYS})
+NEVER_TRAINED_ON_LIBERO += tuple(k["label"] for k in _EXTRA_KEYS if k["fair"])
 
 
 def spearman(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
@@ -88,64 +92,70 @@ def spearman(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 def fit_norms(enc: str, pooling: str, norm: str, rows: np.ndarray) -> list[tuple]:
     """Per camera, the key normalisation of the plain lookup (fitted on its memory ``rows``, as ``build_memory``)."""
     out = []
-    for cam in CAMS:
-        arr = load_features(DEFAULT_CACHE_DIR, "lerobot/libero", enc, cam, pooling)
-        rows_of = lambda part, arr=arr: torch.from_numpy(np.asarray(arr[part]))  # noqa: E731
+    for cam in DATASET_CAMERAS:
+        raw = load_features(DEFAULT_CACHE_DIR, REPO_ID, enc, cam, pooling)
+
+        def rows_of(part: np.ndarray, raw=raw) -> torch.Tensor:
+            return torch.from_numpy(np.asarray(raw[part]))
+
         out.append(fit_key_norm(norm, cam, rows, rows_of, "cpu", chunk=8192))
     return out
 
 
 def key_features(enc: str, pooling: str, rows: np.ndarray, norms: list[tuple]) -> list[torch.Tensor]:
+    """Per camera, the plain lookup's unit-norm keys of dataset ``rows`` (``norms`` from :func:`fit_norms`)."""
     out = []
-    for cam, norm in zip(CAMS, norms, strict=True):
-        x = torch.from_numpy(
-            np.asarray(load_features(DEFAULT_CACHE_DIR, "lerobot/libero", enc, cam, pooling)[rows])
-        )
-        out.append(normalize_keys(x.float(), pooling, *norm))
+    for cam, norm in zip(DATASET_CAMERAS, norms, strict=True):
+        raw = load_features(DEFAULT_CACHE_DIR, REPO_ID, enc, cam, pooling)
+        out.append(normalize_keys(torch.from_numpy(np.asarray(raw[rows])), pooling, *norm))
     return out
 
 
 @torch.no_grad()
-def evaluate(space: str, f, horizon: int = 10, ks=(1, 8), local_m: int = 64, queries_per_task: int = 120,
-             query_episodes: np.ndarray | None = None) -> dict:  # fmt: skip
+def evaluate(
+    space: str,
+    frames: FrameIndex,
+    horizon: int = 10,
+    ks: tuple[int, ...] = (1, 8),
+    local_m: int = 64,
+    queries_per_task: int = 120,
+    query_episodes: np.ndarray | None = None,
+) -> dict:
+    """``lac@k``, ``local_rho`` and ``global_rho`` (see the module docstring) of one key space."""
     enc, pooling, norm, _ = SPACES[space]
-    mem_all = np.nonzero(f.frame_index % 2 == 0)[0]
-    norms = fit_norms(enc, pooling, norm, mem_all)
-    act = torch.from_numpy(f.action)
-    end = torch.from_numpy(f.episode_end)
+    memory = np.nonzero(frames.frame_index % 2 == 0)[0]
+    norms = fit_norms(enc, pooling, norm, memory)
     rng = np.random.default_rng(0)
     lac = {k: [] for k in ks}
     local_rho, global_rho = [], []
-    for t in np.unique(f.task_index):
-        cand = mem_all[f.task_index[mem_all] == t]
-        q_all = cand[f.frame_index[cand] % 10 == 4]
+    for task in np.unique(frames.task_index):
+        cand = memory[frames.task_index[memory] == task]
+        queries = cand[frames.frame_index[cand] % 10 == 4]
         if query_episodes is not None:
-            q_all = q_all[np.isin(f.episode_index[q_all], query_episodes)]
-        q = np.sort(rng.choice(q_all, min(queries_per_task, len(q_all)), replace=False))
-        kc = key_features(enc, pooling, cand, norms)
-        pos = {int(r): i for i, r in enumerate(cand)}
-        qi = torch.tensor([pos[int(r)] for r in q])
-        d_e = sum(2 - 2 * k[qi] @ k.T for k in kc) / len(kc)  # (Q, C)
-        ya = act[torch.minimum(torch.from_numpy(cand)[:, None] + torch.arange(horizon), end[cand][:, None])][
-            ..., :6
-        ]
-        ya = ya.reshape(len(cand), -1)
-        d_a = torch.cdist(ya[qi], ya).pow(2) / ya.shape[1]  # (Q, C) mean squared motion difference
-        other = (
-            torch.from_numpy(f.episode_index[cand])[None, :] != torch.from_numpy(f.episode_index[q])[:, None]
-        )
+            queries = queries[np.isin(frames.episode_index[queries], query_episodes)]
+        queries = np.sort(rng.choice(queries, min(queries_per_task, len(queries)), replace=False))
+        position = {int(r): i for i, r in enumerate(cand)}
+        qi = torch.tensor([position[int(r)] for r in queries])  # the queries' positions among the candidates
+        keys = key_features(enc, pooling, cand, norms)
+        d_e = sum(2 - 2 * k[qi] @ k.T for k in keys) / len(keys)  # (Q, C) mean camera distance
+        motion = torch.from_numpy(action_chunks(frames, cand, horizon)[..., MOTION]).reshape(len(cand), -1)
+        d_a = (
+            torch.cdist(motion[qi], motion).pow(2) / motion.shape[1]
+        )  # (Q, C) mean squared motion difference
+        episode = torch.from_numpy(frames.episode_index[cand])
+        other = episode[None, :] != episode[qi][:, None]  # candidates of other demonstrations
         d_e = d_e.masked_fill(~other, float("inf"))
-        rand = (d_a * other).sum(1) / other.sum(1)
+        d_a_random = (d_a * other).sum(1) / other.sum(1)
         order = d_e.argsort(1)
         for k in ks:
-            nn = d_a.gather(1, order[:, :k]).mean(1)
-            lac[k].append((1 - nn / rand.clamp_min(1e-9)).numpy())
-        top = order[:, :local_m]
-        local_rho.append(spearman(d_e.gather(1, top), d_a.gather(1, top)).numpy())
-        sub = torch.stack(
+            d_a_neighbours = d_a.gather(1, order[:, :k]).mean(1)
+            lac[k].append((1 - d_a_neighbours / d_a_random.clamp_min(1e-9)).numpy())
+        nearest = order[:, :local_m]
+        local_rho.append(spearman(d_e.gather(1, nearest), d_a.gather(1, nearest)).numpy())
+        sample = torch.stack(
             [torch.from_numpy(rng.choice(np.nonzero(o.numpy())[0], 256, replace=False)) for o in other]
         )
-        global_rho.append(spearman(d_e.gather(1, sub), d_a.gather(1, sub)).numpy())
+        global_rho.append(spearman(d_e.gather(1, sample), d_a.gather(1, sample)).numpy())
     res = {f"lac@{k}": float(np.concatenate(v).mean()) for k, v in lac.items()}
     res["local_rho"] = float(np.concatenate(local_rho).mean())
     res["global_rho"] = float(np.concatenate(global_rho).mean())
@@ -155,13 +165,12 @@ def evaluate(space: str, f, horizon: int = 10, ks=(1, 8), local_m: int = 64, que
 def correlate(results: dict, heldout: bool, protocol: str = "full50") -> dict:
     """``protocol``: "full50" relates to the lookups on the official protocol (initial states 0-49, all 40 tasks) only;
     "any": the latest run of each key, whatever its episodes."""
-    runs = {}
-    for line in Path("outputs/knn/compare.jsonl").read_text().splitlines():
-        r = json.loads(line)
-        if protocol == "full50" and not (r.get("tag") == "full50" and r.get("init_states") == "0:50"):
+    success = {}  # config stem -> closed-loop success (%)
+    for run in read_jsonl(KNN_OUT / "compare.jsonl"):
+        if protocol == "full50" and not (run.get("tag") == "full50" and run.get("init_states") == "0:50"):
             continue
-        runs[Path(r["config_file"]).stem] = 100 * r["success"]
-    rows = [(name, m, runs[SPACES[name][3]]) for name, m in results.items() if SPACES[name][3] in runs]
+        success[Path(run["config_file"]).stem] = 100 * run["success"]
+    rows = [(name, m, success[SPACES[name][3]]) for name, m in results.items() if SPACES[name][3] in success]
 
     def fair(name: str) -> bool:
         return name.startswith(NEVER_TRAINED_ON_LIBERO) and ("learnt" not in name or heldout)
@@ -193,18 +202,16 @@ def main() -> None:
     parser.add_argument("--threads", type=int, default=16)
     args = parser.parse_args()
     torch.set_num_threads(args.threads)
-    f = load_frame_index("lerobot/libero")
-    query_episodes = (
-        np.array(json.loads(Path("outputs/vla/split.json").read_text())["heldout"]) if args.heldout else None
-    )
-    out_path = Path(args.out or f"outputs/vla/neighbor_metric{'_heldout' if args.heldout else ''}.json")
+    frames = load_frame_index(REPO_ID)
+    query_episodes = np.array(json.loads(SPLIT.read_text())["heldout"]) if args.heldout else None
+    out_path = Path(args.out or VLA_OUT / f"neighbor_metric{'_heldout' if args.heldout else ''}.json")
     results = json.loads(out_path.read_text())["spaces"] if out_path.exists() else {}
     results = {k: v for k, v in results.items() if k in SPACES}  # spaces dropped from the study
     for space in args.spaces.split(","):
         if space in results:
             continue
         try:
-            results[space] = evaluate(space, f, query_episodes=query_episodes)
+            results[space] = evaluate(space, frames, query_episodes=query_episodes)
         except FileNotFoundError as e:
             print(f"skip {space}: {e}")
             continue

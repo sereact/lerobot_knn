@@ -9,7 +9,7 @@ frames, and executes a weighted average of the action chunks that followed them.
 combination of demonstrated actions.
 
 **We do not propose kNN for robot control**: a lookup cannot extrapolate beyond its memory. We use it as a probe,
-"Your VLA is Secretly kNN", that answers three questions without training anything:
+"How Much of Your VLA is kNN", that answers three questions without training anything:
 
 1. **How hard is the task?** What a lookup over generic image features already solves is retrieval, not
    generalisation.
@@ -237,23 +237,22 @@ number the poster and paper use, `poster/data/embedding_maps.json` the 2-D maps.
 ## Poster and paper
 
 ```bash
-make -C poster   # prepare_data.py -> make_figures.py -> poster.pdf (LuaLaTeX)
-make -C paper    # the same scripts in paper mode -> paper.pdf (CoRL 2026 workshop template, pdfLaTeX)
+make -C poster          # prepare_data.py -> make_figures.py -> poster/figures/, numbers.tex
+make -C poster/corl2026 # the CoRL 2026 workshop poster -> poster.pdf (HTML + SVG, Chromium)
+make -C paper           # the same scripts in paper mode -> paper.pdf (CoRL 2026 workshop template, pdfLaTeX)
 ```
 
-No number in `poster.tex` or `paper.tex` is typed by hand: they come from the generated `numbers.tex` and tables. See
-[`poster/README.md`](poster/README.md).
+No number in `paper.tex` is typed by hand: they come from the generated `numbers.tex` and tables. See
+[`poster/README.md`](poster/README.md) and [`poster/corl2026/README.md`](poster/corl2026/README.md).
 
 ## Repository layout
 
 | Path | Contents |
 | --- | --- |
 | `src/lerobot_policy_knn/` | the plugin: `configuration_knn.py`, `modeling_knn.py`, `processor_knn.py`, `memory.py`, `features.py`, `encoders.py`, `fit.py` (`lerobot-knn-fit`), `vla.py` (VLM keys and VLA rollouts) |
-| `src/lerobot_policy_knn/experiments/` | the study's evaluation and analysis modules (table above) |
+| `src/lerobot_policy_knn/experiments/` | the study's evaluation and analysis modules (table above); `common.py` holds the paths and helpers they share |
 | `outputs/knn/`, `outputs/vla/configs/` | tracked configurations: Optuna trials, `v2_39.json`, ablations, k sweep, retry, TTA, and the VLM keys |
 | `outputs/libero_plus/` | `setup.sh` and `venv_constraints.txt` for the LIBERO-plus venv |
-| `poster/`, `paper/` | the A1 poster and the CoRL 2026 workshop paper |
+| `poster/`, `paper/` | the figure scripts and their data, the CoRL 2026 workshop poster (`poster/corl2026/`) and the workshop paper |
 | `docs/` | experiment notes and literature review |
-| `scripts/derroboter_policy_server.py` | serves a LeRobot policy (e.g. a kNN) to the derroboter robot over its Zenoh policy protocol |
-| `outputs/tri-arm-shoe-box-knn/scripts/` | dataset building and offline evaluation for kNN policies on the tri-arm shoe-box recordings |
 | `tests/` | `uv run pytest tests` |

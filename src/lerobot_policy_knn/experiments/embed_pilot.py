@@ -15,12 +15,16 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from ..features import DEFAULT_CACHE_DIR, _cache_root, load_frame_index
+from ..features import DEFAULT_CACHE_DIR, cache_root, load_frame_index
+from ..vla import DATASET_CAMERAS
+from .common import GRIPPER, MOTION, REPO_ID, VLA_OUT, action_chunks
 
-CAMS = ("observation.images.image", "observation.images.image2")
+CELLS = 4  # a grid2 key: 2x2 cells per camera
 
 
 def normalise(x: torch.Tensor, mode: str, cells: int) -> torch.Tensor:
+    """Unit-norm keys from raw ``grid2`` features: per-cell cosine (``raw``), after a per-dimension ``zscore``, or a
+    whitened 256-D PCA of the whole vector (``pca256``)."""
     if mode == "pca256":
         flat = x.reshape(len(x), -1)
         flat = flat - flat.mean(0)
@@ -38,45 +42,48 @@ def main() -> None:
     parser.add_argument("dirs", nargs="+")
     parser.add_argument("--k", type=int, default=8)
     parser.add_argument("--horizon", type=int, default=10)
-    parser.add_argument("--out", default="outputs/vla/embed_pilot.json")
+    parser.add_argument("--out", default=str(VLA_OUT / "embed_pilot.json"))
     args = parser.parse_args()
     torch.set_num_threads(16)
-    f = load_frame_index("lerobot/libero")
+    frames = load_frame_index(REPO_ID)
     horizon, k = args.horizon, args.k
-    act, end = torch.from_numpy(f.action), torch.from_numpy(f.episode_end)
     results = json.loads(Path(args.out).read_text()) if Path(args.out).exists() else {}
-    for d in args.dirs:
-        root = _cache_root(DEFAULT_CACHE_DIR, "lerobot/libero") / d
-        rows = np.load(root / "rows.npy")
-        pos = {int(r): i for i, r in enumerate(rows)}
-        q = rows[f.frame_index[rows] % 10 == 4]
-        qi = torch.tensor([pos[int(r)] for r in q])
-        ym = act[torch.minimum(torch.from_numpy(rows)[:, None] + torch.arange(horizon), end[rows][:, None])]
-        yq = ym[qi]
-        tm, tq = f.task_index[rows], f.task_index[q]
-        em = torch.from_numpy(f.episode_index[rows])
-        eq = em[qi]
-        poolings = sorted({p.name.split(".")[-2] for p in root.glob("observation.images.image.*.npy")})
-        results.setdefault(d, {})
+    for name in args.dirs:
+        root = cache_root(DEFAULT_CACHE_DIR, REPO_ID) / name
+        rows = np.load(root / "rows.npy")  # the cached (memory) frames
+        position = {int(r): i for i, r in enumerate(rows)}
+        queries = rows[frames.frame_index[rows] % 10 == 4]
+        qi = torch.tensor([position[int(r)] for r in queries])
+        chunks = torch.from_numpy(action_chunks(frames, rows, horizon))
+        target = chunks[qi]
+        task, query_task = frames.task_index[rows], frames.task_index[queries]
+        episode = torch.from_numpy(frames.episode_index[rows])
+        poolings = sorted({p.name.split(".")[-2] for p in root.glob(f"{DATASET_CAMERAS[0]}.*.npy")})
+        results.setdefault(name, {})
         for pooling in poolings:
-            raw = [torch.from_numpy(np.load(root / f"{c}.{pooling}.npy").astype(np.float32)) for c in CAMS]
+            raw = [
+                torch.from_numpy(np.load(root / f"{cam}.{pooling}.npy").astype(np.float32))
+                for cam in DATASET_CAMERAS
+            ]
             for mode in ("raw", "zscore", "pca256"):
-                keys = [normalise(x.clone(), mode, 4) for x in raw]
-                sse = sst = grip = 0.0
-                for t in np.unique(tq):
-                    mm = torch.from_numpy(np.nonzero(tm == t)[0])
-                    qm = torch.from_numpy(np.nonzero(tq == t)[0])
-                    dist = sum(2 - 2 * k[qi[qm]] @ k[mm].T for k in keys) / len(keys)
-                    dist[eq[qm][:, None] == em[mm][None, :]] = float("inf")
-                    dd, idx = dist.topk(k, largest=False)
-                    w = torch.softmax(-dd / (0.1 * dd.mean(1, keepdim=True)), 1)
-                    pred, y = (w[..., None, None] * ym[mm][idx]).sum(1), yq[qm]
-                    sse += float(((pred[..., :6] - y[..., :6]) ** 2).sum())
-                    sst += float(((y[..., :6] - y[..., :6].mean(0)) ** 2).sum())
-                    grip += float((torch.sign(pred[..., 6]) == torch.sign(y[..., 6])).float().sum())
-                r2, g = 1 - sse / sst, grip / (len(q) * horizon)
-                results[d][f"{pooling}|{mode}"] = {"r2": r2, "gripper": g, "n_queries": len(q)}
-                print(f"{d:28s} {pooling:14s} {mode:7s} R2={r2:.3f} grip={g:.3f}", flush=True)
+                keys = [normalise(x.clone(), mode, CELLS) for x in raw]
+                sse = sst = gripper_hits = 0.0
+                for t in np.unique(query_task):
+                    mem = torch.from_numpy(np.nonzero(task == t)[0])
+                    qs = torch.from_numpy(np.nonzero(query_task == t)[0])
+                    dist = sum(2 - 2 * key[qi[qs]] @ key[mem].T for key in keys) / len(keys)
+                    dist[episode[qi[qs]][:, None] == episode[mem][None, :]] = float("inf")  # other demos only
+                    nearest, idx = dist.topk(k, largest=False)
+                    weights = torch.softmax(-nearest / (0.1 * nearest.mean(1, keepdim=True)), 1)
+                    pred, y = (weights[..., None, None] * chunks[mem][idx]).sum(1), target[qs]
+                    sse += float(((pred[..., MOTION] - y[..., MOTION]) ** 2).sum())
+                    sst += float(((y[..., MOTION] - y[..., MOTION].mean(0)) ** 2).sum())
+                    gripper_hits += float(
+                        (torch.sign(pred[..., GRIPPER]) == torch.sign(y[..., GRIPPER])).float().sum()
+                    )
+                r2, gripper = 1 - sse / sst, gripper_hits / (len(queries) * horizon)
+                results[name][f"{pooling}|{mode}"] = {"r2": r2, "gripper": gripper, "n_queries": len(queries)}
+                print(f"{name:28s} {pooling:14s} {mode:7s} R2={r2:.3f} grip={gripper:.3f}", flush=True)
             del raw
         Path(args.out).write_text(json.dumps(results, indent=1))
 

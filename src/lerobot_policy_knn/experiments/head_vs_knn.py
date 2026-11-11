@@ -19,19 +19,19 @@ observation) and how close the VLA's chunks come to *any* training chunk of the 
 
 import argparse
 import json
+from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from lerobot.utils.constants import OBS_STATE
-
 from ..configuration_knn import KNNConfig
-from ..modeling_knn import camera_key_name
+from ..features import FrameIndex
+from ..modeling_knn import KNNPolicy, camera_key_name
 from ..vla import DATASET_CAMERAS, VLA_CAMERA, cache_tag, load_vla, resolve_spec
+from .common import GRIPPER, MOTION, PLUS_OUT, VLA_OUT, action_chunks, record_batch
 from .search import MemoryFactory
 
-MOTION = slice(0, 6)
 IMAGE_SPACES = {
     "dinov2": {"image_encoder": "dinov2_small", "image_pooling": "cls"},
     "resnet18_l3": {"image_encoder": "resnet18_l3", "image_pooling": "grid4"},
@@ -39,7 +39,7 @@ IMAGE_SPACES = {
 }
 
 
-def base_task(name: str, tasks) -> str:
+def base_task(name: str, tasks: Iterable[str]) -> str:
     """The LIBERO task a (LIBERO-plus variant) instruction or name derives from: itself, else the longest task
     whose text it starts with or contains (variants append e.g. ``_moved_level5_sample4`` to the task name)."""
     if name in tasks:
@@ -52,22 +52,33 @@ def base_task(name: str, tasks) -> str:
 
 
 def space_config(space: str, k: int, horizon: int) -> KNNConfig:
-    """``<encoder space>[|<key_norm>]``, e.g. ``resnet18_l3``, ``vla:pi05_libero/grid2@L12|zscore``."""
+    """The plain lookup (no state, time, history or mode seeking) on a key space named
+    ``<encoder space>[|<key_norm>]``, e.g. ``resnet18_l3``, ``vla:pi05_libero/grid2@L12|zscore``."""
     space, _, key_norm = space.partition("|")
     if space.startswith("vla:"):
-        enc, pooling = space.rsplit("/", 1)
+        encoder, pooling = space.rsplit("/", 1)
         per_camera = pooling == "img" or pooling.startswith("grid2")
-        cams = list(DATASET_CAMERAS) if per_camera else [VLA_CAMERA]
-        emb = {"image_encoder": enc, "image_pooling": pooling}
+        cameras = list(DATASET_CAMERAS) if per_camera else [VLA_CAMERA]
+        embedding = {"image_encoder": encoder, "image_pooling": pooling}
     else:
-        cams = list(DATASET_CAMERAS)
-        emb = dict(IMAGE_SPACES[space])
+        cameras = list(DATASET_CAMERAS)
+        embedding = dict(IMAGE_SPACES[space])
     return KNNConfig(
-        device="cuda", **emb, key_norm=key_norm or "none", camera_weights=dict.fromkeys(cams, 1.0),
-        state_weight=0.0, time_weight=0.0,
-        task_conditioning="filter", k=k, temperature=0.1, one_per_episode=True, history_weight=0.0,
-        chunk_size=horizon, n_action_steps=horizon, memory_stride=2,
-    )  # fmt: skip
+        device="cuda",
+        **embedding,
+        key_norm=key_norm or "none",
+        camera_weights=dict.fromkeys(cameras, 1.0),
+        state_weight=0.0,
+        time_weight=0.0,
+        task_conditioning="filter",
+        k=k,
+        temperature=0.1,
+        one_per_episode=True,
+        history_weight=0.0,
+        chunk_size=horizon,
+        n_action_steps=horizon,
+        memory_stride=2,
+    )
 
 
 def r2(y: np.ndarray, p: np.ndarray, groups: np.ndarray) -> float:
@@ -80,17 +91,20 @@ def r2(y: np.ndarray, p: np.ndarray, groups: np.ndarray) -> float:
 
 
 def chunk_metrics(y: np.ndarray, p: np.ndarray, top1: np.ndarray, groups: np.ndarray) -> dict[str, float]:
+    """How well chunks ``p`` (and the single nearest neighbour's, ``top1``) predict the chunks ``y``."""
     return {
         "r2": r2(y[..., MOTION], p[..., MOTION], groups),
         "mse": float(((y[..., MOTION] - p[..., MOTION]) ** 2).mean()),
         "top1_mse": float(((y[..., MOTION] - top1[..., MOTION]) ** 2).mean()),
         "top1_r2": r2(y[..., MOTION], top1[..., MOTION], groups),
-        "gripper": float((np.sign(y[..., 6]) == np.sign(p[..., 6])).mean()),
+        "gripper": float((np.sign(y[..., GRIPPER]) == np.sign(p[..., GRIPPER])).mean()),
     }
 
 
 @torch.no_grad()
-def retrieve_chunks(policy, query: dict, t: torch.Tensor, task: torch.Tensor, horizon: int, exclude=None):
+def retrieve_chunks(
+    policy: KNNPolicy, query: dict, t: torch.Tensor, task: torch.Tensor, horizon: int, exclude=None
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """(kNN answer, nearest neighbour's chunk, distance to the nearest neighbour) per query."""
     rows, w, d = policy.retrieve(query, t, task, exclude_episode=exclude)
     pred = policy.aggregate(rows, w)[:, :horizon]
@@ -99,43 +113,115 @@ def retrieve_chunks(policy, query: dict, t: torch.Tensor, task: torch.Tensor, ho
 
 
 @torch.no_grad()
-def embed_records(policy, rec: dict, batch: int = 48) -> dict[str, torch.Tensor]:
+def embed_records(policy: KNNPolicy, rec: dict, batch: int = 48) -> dict[str, torch.Tensor]:
     """Keys of recorded observations; the batch halves whenever an embedder runs out of GPU memory (e.g. Evo-1's eager
     attention at 448 px)."""
     out: dict[str, list[torch.Tensor]] = {}
     n = len(rec["state"])
-    s = 0
-    while s < n:
-        sl = slice(s, min(n, s + batch))
-        b = {
-            cam: torch.from_numpy(rec["images"][sl, i]).cuda().float() / 255.0
-            for i, cam in enumerate(DATASET_CAMERAS)
-        }
-        b[OBS_STATE] = torch.from_numpy(rec["state"][sl]).float().cuda()
-        b["task"] = [str(rec["task_names"][i]) for i in rec["task"][sl]]
+    start = 0
+    while start < n:
+        rows = slice(start, min(n, start + batch))
         try:
-            keys = policy.encode_observation(b)
+            keys = policy.encode_observation(record_batch(rec, rows, device="cuda"))
         except torch.OutOfMemoryError:
             if batch == 1:
                 raise
             batch = max(1, batch // 2)
             torch.cuda.empty_cache()
             continue
-        for key, v in keys.items():
-            out.setdefault(key, []).append(v)
-        s = sl.stop
-    return {k: torch.cat(v) for k, v in out.items()}
+        for name, value in keys.items():
+            out.setdefault(name, []).append(value)
+        start = rows.stop
+    return {name: torch.cat(values) for name, values in out.items()}
 
 
 @torch.no_grad()
-def demo_queries(policy, factory, rows: np.ndarray) -> dict[str, torch.Tensor]:
+def demo_queries(policy: KNNPolicy, factory: MemoryFactory, rows: np.ndarray) -> dict[str, torch.Tensor]:
+    """Keys of demonstration frames ``rows``, from the feature cache."""
     cfg = policy.config
-    q = {}
+    queries = {}
     for cam in cfg.active_cameras:
         raw = factory.load_raw(cfg.image_encoder, cam, cfg.image_pooling, cfg.image_resolution)
         name = camera_key_name(cam)
-        q[name] = policy.key_features(name, torch.as_tensor(np.asarray(raw[rows])).cuda())
-    return q
+        queries[name] = policy.key_features(name, torch.as_tensor(np.asarray(raw[rows])).cuda())
+    return queries
+
+
+def record_tasks(rec: dict, frames: FrameIndex) -> np.ndarray:
+    """Memory task index of every recorded step."""
+    task_of = {name: i for i, name in enumerate(frames.task_names)}
+    if (
+        "category" in rec
+    ):  # LIBERO-plus rollouts: the base task from each variant's name (prompts may be reworded)
+        sample = json.loads((PLUS_OUT / "sample.json").read_text())
+        name_of = {(s["suite"], s["task_id"]): s["name"] for s in sample}
+        names = [name_of[(str(su), int(ti))] for su, ti in zip(rec["suite"], rec["task_id"], strict=True)]
+    else:
+        names = [str(n) for n in rec["task_names"][rec["task"]]]
+    return np.array([task_of[base_task(n, task_of)] for n in names])
+
+
+def noise_floor(vla: str, rec: dict, y_vla: np.ndarray, rec_task: np.ndarray, batch: int = 32) -> dict:
+    """Reference 1: the VLA's own sampling noise, a second sample at every recorded observation."""
+    policy, pre, post = load_vla(vla)
+    rename = resolve_spec(vla).camera_rename
+    horizon = y_vla.shape[1]
+
+    def predict(b: dict) -> np.ndarray:
+        policy.reset()
+        return post(policy.predict_action_chunk(pre(b))).float().cpu().numpy()[:, :horizon]
+
+    resampled = []
+    for s in range(0, len(y_vla), batch):
+        b = {rename.get(k, k): v for k, v in record_batch(rec, slice(s, s + batch)).items()}
+        try:
+            resampled.append(predict(b))
+        except Exception:  # noqa: BLE001 - e.g. an invalid FAST token sequence: row by row, failures as NaN
+            rows = []
+            for j in range(len(b["task"])):
+                one = {k: (v[j : j + 1] if torch.is_tensor(v) else [v[j]]) for k, v in b.items()}
+                try:
+                    rows.append(predict(one))
+                except Exception:  # noqa: BLE001
+                    rows.append(np.full((1, horizon, y_vla.shape[-1]), np.nan, dtype=np.float32))
+            resampled.append(np.concatenate(rows))
+    y2 = np.concatenate(resampled)
+    ok = ~np.isnan(y2).any(axis=(1, 2))
+    out = {f"vla_{a}": b for a, b in chunk_metrics(y_vla[ok], y2[ok], y2[ok], rec_task[ok]).items()}
+    out["rows_failed"] = int((~ok).sum())
+    return out
+
+
+def nearest_training_chunks(
+    frames: FrameIndex,
+    episodes: np.ndarray | None,
+    y_vla: np.ndarray,
+    rec_task: np.ndarray,
+    y_demo: np.ndarray,
+    demo_rows: np.ndarray,
+) -> tuple[list[float], list[float]]:
+    """Reference 2: does the VLA output something it has seen? The motion MSE from every VLA chunk to the nearest
+    training chunk of its task, and from (up to 1,000) held-out demo chunks to the nearest chunk of another demo."""
+    horizon = y_vla.shape[1]
+    memory = np.nonzero(frames.frame_index % 2 == 0)[0]
+    if episodes is not None:
+        memory = memory[np.isin(frames.episode_index[memory], episodes)]
+    table = torch.from_numpy(action_chunks(frames, memory, horizon)[..., MOTION]).cuda()
+    task = torch.from_numpy(frames.task_index[memory]).cuda()
+    episode = torch.from_numpy(frames.episode_index[memory]).cuda()
+
+    def nearest(chunk: np.ndarray, candidates: torch.Tensor) -> float:
+        return float(
+            (table[candidates] - torch.from_numpy(chunk[:, MOTION]).cuda()).pow(2).mean((1, 2)).min()
+        )
+
+    vla = [nearest(y_vla[i], task == int(rec_task[i])) for i in range(len(y_vla))]
+    demo = []
+    for i in range(min(1000, len(demo_rows))):
+        row = demo_rows[i]
+        other_demos = (task == int(frames.task_index[row])) & (episode != int(frames.episode_index[row]))
+        demo.append(nearest(y_demo[i], other_demos))
+    return vla, demo
 
 
 def main() -> None:
@@ -157,43 +243,35 @@ def main() -> None:
         "--no_noise_floor", action="store_true", help="skip only the noise floor (it re-runs the VLA itself)"
     )
     args = parser.parse_args()
-    horizon = args.horizon
     ks = [int(k) for k in args.ks.split(",")]
-    data = np.load(args.rollouts)
-    rec = {k: data[k] for k in data.files}
+    rec = dict(np.load(args.rollouts))
     # a VLA re-planning every n < horizon steps (VLA-JEPA: 7) recorded n-step chunks: compare that many actions
-    horizon = min(horizon, int(rec["chunk"].shape[1]))
-    # rollout prompts -> memory task ids
+    horizon = min(args.horizon, int(rec["chunk"].shape[1]))
     factory = MemoryFactory()
     frames = factory.frames
-    task_of = {name: i for i, name in enumerate(frames.task_names)}
-    if (
-        "category" in rec
-    ):  # LIBERO-plus rollouts: the base task from each variant's name (prompts may be reworded)
-        sample = json.loads(Path("outputs/libero_plus/sample.json").read_text())
-        name_of = {(s["suite"], s["task_id"]): s["name"] for s in sample}
-        names = [name_of[(str(su), int(ti))] for su, ti in zip(rec["suite"], rec["task_id"], strict=True)]
-    else:
-        names = [str(n) for n in rec["task_names"][rec["task"]]]
-    rec_task = np.array([task_of[base_task(n, task_of)] for n in names])
+    rec_task = record_tasks(rec, frames)
     y_vla = rec["chunk"][:, :horizon]
 
+    # held-out demonstration frames: what the same lookup predicts of the demonstrator
     episodes = None
-    demo_rows_pool = np.nonzero(frames.frame_index % 10 == 4)[0]
+    demo_pool = np.nonzero(frames.frame_index % 10 == 4)[0]
     if args.train_split:
         split = json.loads(Path(args.train_split).read_text())
         episodes = np.array(split["train"])
-        demo_rows_pool = demo_rows_pool[np.isin(frames.episode_index[demo_rows_pool], split["heldout"])]
+        demo_pool = demo_pool[np.isin(frames.episode_index[demo_pool], split["heldout"])]
     rng = np.random.default_rng(0)
-    demo_rows = np.sort(
-        rng.choice(demo_rows_pool, min(args.demo_queries, len(demo_rows_pool)), replace=False)
-    )
-    gt_idx = np.minimum(demo_rows[:, None] + np.arange(horizon), frames.episode_end[demo_rows][:, None])
-    y_demo = frames.action[gt_idx]
+    demo_rows = np.sort(rng.choice(demo_pool, min(args.demo_queries, len(demo_pool)), replace=False))
+    y_demo = action_chunks(frames, demo_rows, horizon)
     demo_task = frames.task_index[demo_rows]
 
-    result: dict = {"rollouts": args.rollouts, "vla": args.vla, "horizon": horizon, "n_chunks": len(y_vla),
-                    "vla_success": float(np.mean(rec["success"])), "spaces": {}}  # fmt: skip
+    result: dict = {
+        "rollouts": args.rollouts,
+        "vla": args.vla,
+        "horizon": horizon,
+        "n_chunks": len(y_vla),
+        "vla_success": float(np.mean(rec["success"])),
+        "spaces": {},
+    }
     per_record: dict[str, list[float]] = {}
     novelty: dict[str, list[float]] = {}  # top-1 distance to the memory / the typical leave-one-demo-out one
     for space in args.spaces.split(","):
@@ -205,93 +283,45 @@ def main() -> None:
         task_vla = torch.from_numpy(rec_task).cuda()
         t_demo = torch.from_numpy(frames.frame_index[demo_rows]).cuda()
         task_demo = torch.from_numpy(demo_task).cuda()
-        excl = torch.from_numpy(frames.episode_index[demo_rows]).cuda() if episodes is None else None
+        # with the whole dataset as memory, a demo query must not retrieve its own demonstration
+        exclude = torch.from_numpy(frames.episode_index[demo_rows]).cuda() if episodes is None else None
         for k in ks:
             policy.config.k = k
             p, top1, d1 = retrieve_chunks(policy, q_vla, t_vla, task_vla, horizon)
-            pd, top1d, d1d = retrieve_chunks(policy, q_demo, t_demo, task_demo, horizon, exclude=excl)
+            p_demo, top1_demo, d1_demo = retrieve_chunks(policy, q_demo, t_demo, task_demo, horizon, exclude)
             m = {f"vla_{a}": b for a, b in chunk_metrics(y_vla, p, top1, rec_task).items()}
-            m.update({f"demo_{a}": b for a, b in chunk_metrics(y_demo, pd, top1d, demo_task).items()})
+            m.update({f"demo_{a}": b for a, b in chunk_metrics(y_demo, p_demo, top1_demo, demo_task).items()})
             result["spaces"][space][k] = m
             if k == 8:
                 per_record[space] = (((y_vla[..., MOTION] - p[..., MOTION]) ** 2).mean((1, 2))).tolist()
-                novelty[space] = (d1 / max(float(np.median(d1d)), 1e-9)).tolist()
+                novelty[space] = (d1 / max(float(np.median(d1_demo)), 1e-9)).tolist()
             print(space, k, {a: round(b, 4) for a, b in m.items()}, flush=True)
         del policy, q_vla, q_demo
-        factory._encoders.clear()
-        torch.cuda.empty_cache()
+        factory.release_encoders()
     result["per_record_mse_k8"] = per_record
     result["per_record_novelty"] = novelty
-    result["per_record"] = {k: [str(x) if k == "category" else x.item() for x in rec[k]]
-                            for k in ("success", "episode", "category") if k in rec}  # fmt: skip
-
-    out = Path(args.out or f"outputs/vla/head_vs_knn_{cache_tag(args.vla)}.json")
-    if args.no_references:
-        out.write_text(json.dumps(result, indent=1))
-        print("->", out)
-        return
-    if not args.no_noise_floor:  # reference 1: the VLA's own sampling noise at the recorded observations
-        policy, pre, post = load_vla(args.vla)
-        rename = resolve_spec(args.vla).camera_rename
-
-        def predict(b):
-            policy.reset()
-            return post(policy.predict_action_chunk(pre(b))).float().cpu().numpy()[:, :horizon]
-
-        resampled = []
-        for s in range(0, len(y_vla), 32):
-            sl = slice(s, s + 32)
-            b = {
-                rename.get(cam, cam): torch.from_numpy(rec["images"][sl, i]).float() / 255.0
-                for i, cam in enumerate(DATASET_CAMERAS)
-            }
-            b[OBS_STATE] = torch.from_numpy(rec["state"][sl]).float()
-            b["task"] = [str(rec["task_names"][i]) for i in rec["task"][sl]]
-            try:
-                resampled.append(predict(b))
-            except Exception:  # noqa: BLE001 - e.g. an invalid FAST token sequence: row by row, failures as NaN
-                rows = []
-                for j in range(len(b["task"])):
-                    one = {k: (v[j : j + 1] if torch.is_tensor(v) else [v[j]]) for k, v in b.items()}
-                    try:
-                        rows.append(predict(one))
-                    except Exception:  # noqa: BLE001
-                        rows.append(np.full((1, horizon, y_vla.shape[-1]), np.nan, dtype=np.float32))
-                resampled.append(np.concatenate(rows))
-        y2 = np.concatenate(resampled)
-        ok = ~np.isnan(y2).any(axis=(1, 2))
-        result["noise_floor"] = {
-            f"vla_{a}": b for a, b in chunk_metrics(y_vla[ok], y2[ok], y2[ok], rec_task[ok]).items()
-        }
-        result["noise_floor"]["rows_failed"] = int((~ok).sum())
-        del policy
-        torch.cuda.empty_cache()
-
-    # reference 2: nearest training chunk of the same task (does the VLA output something it has seen?)
-    mem_rows = np.nonzero(frames.frame_index % 2 == 0)[0]
-    if episodes is not None:
-        mem_rows = mem_rows[np.isin(frames.episode_index[mem_rows], episodes)]
-    idx = np.minimum(mem_rows[:, None] + np.arange(horizon), frames.episode_end[mem_rows][:, None])
-    table = torch.from_numpy(frames.action[idx][..., MOTION]).cuda()
-    mem_task = torch.from_numpy(frames.task_index[mem_rows]).cuda()
-    nn_vla = []
-    for i in range(len(y_vla)):
-        cand = table[mem_task == int(rec_task[i])]
-        nn_vla.append(float((cand - torch.from_numpy(y_vla[i, :, MOTION]).cuda()).pow(2).mean((1, 2)).min()))
-    nn_demo = []
-    mem_ep = torch.from_numpy(frames.episode_index[mem_rows]).cuda()
-    for i in range(min(1000, len(demo_rows))):
-        sel = (mem_task == int(demo_task[i])) & (mem_ep != int(frames.episode_index[demo_rows[i]]))
-        d = (table[sel] - torch.from_numpy(y_demo[i, :, MOTION]).cuda()).pow(2).mean((1, 2))
-        nn_demo.append(float(d.min()))
-    result["nearest_training_chunk"] = {
-        "vla_median": float(np.median(nn_vla)),
-        "demo_median": float(np.median(nn_demo)),
+    result["per_record"] = {
+        k: [str(x) if k == "category" else x.item() for x in rec[k]]
+        for k in ("success", "episode", "category")
+        if k in rec
     }
-    result["per_record_nearest_training_chunk"] = nn_vla
-    print(
-        "noise floor", result.get("noise_floor"), "\nnearest training chunk", result["nearest_training_chunk"]
-    )
+
+    out = Path(args.out or VLA_OUT / f"head_vs_knn_{cache_tag(args.vla)}.json")
+    if not args.no_references:
+        if not args.no_noise_floor:
+            result["noise_floor"] = noise_floor(args.vla, rec, y_vla, rec_task)
+        nn_vla, nn_demo = nearest_training_chunks(frames, episodes, y_vla, rec_task, y_demo, demo_rows)
+        result["nearest_training_chunk"] = {
+            "vla_median": float(np.median(nn_vla)),
+            "demo_median": float(np.median(nn_demo)),
+        }
+        result["per_record_nearest_training_chunk"] = nn_vla
+        print(
+            "noise floor",
+            result.get("noise_floor"),
+            "\nnearest training chunk",
+            result["nearest_training_chunk"],
+        )
     out.write_text(json.dumps(result, indent=1))
     print("->", out)
 

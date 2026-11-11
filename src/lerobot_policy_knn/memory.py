@@ -11,7 +11,7 @@ import torch
 from torch import Tensor
 
 from .configuration_knn import KNNConfig
-from .encoders import TextEncoder, finalize_features
+from .encoders import TextEncoder, normalize_keys
 from .features import DEFAULT_CACHE_DIR, FrameIndex, load_features, load_frame_index
 from .modeling_knn import KNNPolicy, camera_key_name, featurize_state
 
@@ -125,17 +125,6 @@ def fit_key_norm(
     return mean, std, v[:, :n] / (sv[:n] / (len(sample) - 1) ** 0.5).clamp_min(1e-6)
 
 
-def normalize_keys(
-    x: Tensor, pooling: str, mean: Tensor | None, std: Tensor | None, proj: Tensor | None
-) -> Tensor:
-    """Unit-norm retrieval keys from raw features and a fitted :func:`fit_key_norm`."""
-    if mean is not None:
-        x = (x - mean) / std
-    if proj is not None:
-        return torch.nn.functional.normalize(x @ proj, dim=-1)
-    return finalize_features(x, pooling)
-
-
 def build_memory(
     config: KNNConfig,
     frames: FrameIndex,
@@ -169,9 +158,7 @@ def build_memory(
         # finalise in chunks: a full-precision copy of every key at once can exceed free GPU memory
         for s in range(0, len(rows), 32768):
             part = rows[s : s + 32768]
-            chunk = normalize_keys(
-                rows_of(part).to(device).float(), config.image_pooling, mean, std, proj
-            ).half()
+            chunk = normalize_keys(rows_of(part).to(device), config.image_pooling, mean, std, proj).half()
             if keys is None:
                 keys = torch.empty((len(rows), chunk.shape[1]), dtype=torch.float16, device=device)
             keys[s : s + len(part)] = chunk

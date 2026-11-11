@@ -15,7 +15,7 @@ experiments = [
     "optuna-dashboard>=0.19.0,<1.0.0",
     "scikit-learn>=1.5.0,<2.0.0",
 ]
-# VLA backbones as retrieval embedders ("Your VLA is secretly kNN"): the core study set, SmolVLA, pi0 / pi0-FAST /
+# VLA backbones as retrieval embedders ("How Much of Your VLA is kNN"): the core study set, SmolVLA, pi0 / pi0-FAST /
 # pi0.5 and X-VLA.
 vla = [
     "lerobot[smolvla]",

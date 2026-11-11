@@ -14,29 +14,28 @@ from pathlib import Path
 import optuna
 
 from ..configuration_knn import KNNConfig
+from .common import KNN_OUT, append_jsonl, parse_range, suite_scores
 from .libero_pool import SUITES, LiberoPool, make_jobs
-from .search import OUT, MemoryFactory, run_eval
+from .search import MemoryFactory, run_eval
 
-STORAGE = f"sqlite:///{OUT / 'optuna.db'}"
+STORAGE = f"sqlite:///{KNN_OUT / 'optuna.db'}"
 
 
 def candidates(studies: list[str], top: int, top_per_suite: int, suites: list[str] = SUITES) -> list[dict]:
+    """The ``top`` completed trials of the studies overall plus the ``top_per_suite`` best of every suite."""
     done = []
     for name in studies:
-        study = optuna.load_study(study_name=name, storage=STORAGE)
-        for t in study.trials:
-            if t.state == optuna.trial.TrialState.COMPLETE and "config" in t.user_attrs:
+        for trial in optuna.load_study(study_name=name, storage=STORAGE).trials:
+            if trial.state == optuna.trial.TrialState.COMPLETE and "config" in trial.user_attrs:
                 done.append(
                     {
-                        "id": f"{name}#{t.number}",
-                        "value": t.value,
-                        "attrs": t.user_attrs,
-                        "config": json.loads(t.user_attrs["config"]),
+                        "id": f"{name}#{trial.number}",
+                        "value": trial.value,
+                        "attrs": trial.user_attrs,
+                        "config": json.loads(trial.user_attrs["config"]),
                     }
                 )
-    chosen: dict[str, dict] = {}
-    for c in sorted(done, key=lambda c: -c["value"])[:top]:
-        chosen[c["id"]] = c
+    chosen = {c["id"]: c for c in sorted(done, key=lambda c: -c["value"])[:top]}
     for suite in suites:
         for c in sorted(done, key=lambda c: -c["attrs"].get(suite, 0))[:top_per_suite]:
             chosen[c["id"]] = c
@@ -51,25 +50,32 @@ def main() -> None:
     parser.add_argument("--init_states", default="0:20")
     parser.add_argument("--workers", type=int, default=14)
     parser.add_argument("--suites", default=",".join(SUITES))
-    parser.add_argument("--out", default=str(OUT / "final_candidates.json"))
+    parser.add_argument("--out", default=str(KNN_OUT / "final_candidates.json"))
     args = parser.parse_args()
     suites = args.suites.split(",")
     cands = candidates(args.studies.split(","), args.top, args.top_per_suite, suites)
     print(f"{len(cands)} candidates:", [c["id"] for c in cands], flush=True)
-    lo, hi = (int(x) for x in args.init_states.split(":"))
-    jobs = make_jobs(suites, init_states=range(lo, hi))
+    jobs = make_jobs(suites, init_states=parse_range(args.init_states))
     factory = MemoryFactory()
     results = []
     with LiberoPool(n_workers=args.workers) as pool:
         for c in cands:
             summary, _ = run_eval(factory, pool, KNNConfig(device="cuda", **c["config"]), jobs)
-            row = {"tag": "heldout", "config_file": c["id"], "config": c["config"], "init_states": args.init_states,
-                   "search_value": c["value"], **summary}  # fmt: skip
-            with (OUT / "compare.jsonl").open("a") as f:
-                f.write(json.dumps(row) + "\n")
+            row = {
+                "tag": "heldout",
+                "config_file": c["id"],
+                "config": c["config"],
+                "init_states": args.init_states,
+                "search_value": c["value"],
+                **summary,
+            }
+            append_jsonl(KNN_OUT / "compare.jsonl", [row])
             results.append(row)
-            print(f"{c['id']}: held-out {summary['success']:.4f} (search {c['value']:.4f}) "
-                  + " ".join(f"{s.split('_')[1]}={summary[s]:.3f}" for s in suites), flush=True)  # fmt: skip
+            print(
+                f"{c['id']}: held-out {summary['success']:.4f} (search {c['value']:.4f}) "
+                + suite_scores(summary, suites),
+                flush=True,
+            )
     best = max(results, key=lambda r: r["success"])
     per_suite = {s: max(results, key=lambda r: r[s]) for s in suites}
     out = {
@@ -80,11 +86,8 @@ def main() -> None:
         },
     }
     Path(args.out).write_text(json.dumps(out, indent=1))
-    print(
-        json.dumps(
-            {"global": out["global"]["id"], **{s: v["id"] for s, v in out["per_suite"].items()}}, indent=1
-        )
-    )
+    winners = {"global": out["global"]["id"], **{s: v["id"] for s, v in out["per_suite"].items()}}
+    print(json.dumps(winners, indent=1))
 
 
 if __name__ == "__main__":

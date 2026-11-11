@@ -1,0 +1,362 @@
+<!doctype html>
+<!--
+  Poster layout and text. `build.py` replaces the double-braced placeholders with inline SVG charts and writes the result to
+  build/poster.html, hence the <base>: paths below are relative to this folder (assets/ is tracked, build/ is generated).
+  All lengths are in millimetres on a 1360 x 765 mm (16:9) page.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<base href="../">
+<title>How Much of Your VLA is kNN: CoRL 2026 workshop poster</title>
+<style>
+@page { size: 1360mm 765mm; margin: 0; }
+
+:root {
+  --knn: #eb6834;        /* k-NN (ours): chart marks and accents */
+  --knn-soft: #f6b79b;
+  --knn-text: #c4501d;   /* the same orange, darker for small text */
+  --vla: #2a78d6;        /* VLAs */
+  --grey: #8b9099;       /* generic encoders */
+  --ink: #0f1720;
+  --ink-2: #47505c;
+  --muted: #7a828d;
+  --hairline: #d9dce1;
+  --display: "Inter Display", Inter, sans-serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  width: 1360mm; height: 765mm; overflow: hidden; padding: 18mm 28mm 0;
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto;   /* header, columns, bottom band */
+  background: #fff; color: var(--ink);
+  font: 9.5mm/1.3 Inter, sans-serif;
+  -webkit-print-color-adjust: exact; print-color-adjust: exact;
+}
+i.k { font-style: italic; }                       /* the k of k-NN */
+sub { font-size: 0.72em; line-height: 0; }
+strong { font-weight: 700; color: var(--ink); }
+p { color: var(--ink-2); }
+
+/* ---- header: title and authors on the left, logos and headline numbers on the right ---- */
+.header {
+  display: grid; grid-template-columns: 1fr 560mm; gap: 30mm;
+  padding-bottom: 10mm; border-bottom: 1.6mm solid var(--ink);
+}
+h1 { font: 800 48mm/0.98 var(--display); letter-spacing: -0.035em; white-space: nowrap; }
+h1 span { color: var(--knn); }
+.byline { margin-top: 6mm; font-size: 11.4mm; font-weight: 600; }
+.byline b { font-weight: 600; margin-right: 8mm; }
+.byline sup { font-size: 0.6em; font-weight: 500; }
+.byline small { margin-left: 2mm; font-size: 8.4mm; font-weight: 400; color: var(--muted); }
+.byline small span { margin-right: 6mm; }
+.venue { margin-top: 1.5mm; font-size: 8.4mm; font-weight: 500; color: var(--knn-text); }
+
+.aside { display: flex; flex-direction: column; justify-content: space-between; gap: 6mm; }
+.logos { display: flex; align-items: center; justify-content: flex-end; gap: 12mm; }
+.logos img { display: block; }
+.logo-sereact { height: 12mm; }
+.logo-kit { height: 27mm; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 9mm; }
+.stats div {
+  padding-top: 2.5mm; border-top: 1.4mm solid var(--knn);
+  font-size: 8.2mm; line-height: 1.22; color: var(--ink-2);
+}
+.stats b {
+  display: block; margin-bottom: 1.5mm;
+  font: 800 25mm/1 var(--display); letter-spacing: -0.035em; color: var(--ink); white-space: nowrap;
+}
+.stats b small { font-size: 0.48em; font-weight: 700; letter-spacing: 0; color: var(--knn-text); }
+
+/* ---- four columns of blocks; spare height is shared around the rules between blocks ---- */
+.columns {
+  min-height: 0; height: 100%; padding: 9mm 0 8mm;
+  display: grid; grid-template-columns: 300fr 326fr 362fr 316fr; grid-template-rows: minmax(0, 1fr);
+}
+.column {
+  min-width: 0; padding: 0 16mm; border-left: 0.5mm solid var(--hairline);
+  display: flex; flex-direction: column; justify-content: space-between; gap: 5.5mm;
+}
+.column:first-child { padding-left: 0; border-left: 0; }
+.column:last-child { padding-right: 0; }
+.block { flex: none; }
+hr { flex: none; margin: auto 0; border: 0; border-top: 0.5mm solid var(--hairline); }
+
+.eyebrow {
+  margin-bottom: 1.5mm;
+  font-size: 6.8mm; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--knn-text);
+}
+h2 { margin-bottom: 4mm; font: 750 13.6mm/1.1 var(--display); letter-spacing: -0.02em; }
+.intro { font-size: 10.2mm; }
+.intro + .intro, .after-figure { margin-top: 3mm; }
+.lead { margin-bottom: 3mm; }
+.caption { margin-top: 1.5mm; font-size: 7.2mm; line-height: 1.25; color: var(--muted); }
+.block svg, .figure { display: block; max-width: 100%; height: auto; }
+.figure { width: 100%; }
+
+ul { margin-top: 3mm; list-style: none; color: var(--ink-2); }
+li { position: relative; margin-top: 2.4mm; padding-left: 6.5mm; }
+li::before {
+  content: ""; position: absolute; left: 0; top: 0.45em;
+  width: 3mm; height: 3mm; border-radius: 50%; background: var(--knn);
+}
+.numbered { counter-reset: item; margin-top: 4mm; }
+.numbered li { counter-increment: item; margin-top: 3mm; padding-left: 11mm; }
+.numbered li::before {
+  content: counter(item); top: 0.12em; width: 7.6mm; height: 7.6mm; background: var(--ink);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 5.6mm; font-weight: 700; color: #fff;
+}
+
+/* equations: SVG rendered by pdfLaTeX; the height sets the size of the math */
+.equation { display: block; margin-top: 3mm; }
+.equation.policy { height: 28mm; }
+.equation.lac { height: 32mm; }
+
+/* chart legends */
+.legend {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 1mm 7mm; margin-bottom: 2mm;
+  font-size: 7.8mm; color: var(--ink-2);
+}
+.legend > span { display: inline-flex; align-items: center; gap: 2.2mm; }
+.dot { display: inline-block; width: 5.4mm; height: 5.4mm; border-radius: 50%; background: var(--knn); }
+.dot.ring { background: #fff; border: 1.3mm solid var(--knn); }
+.dot.vla { background: var(--vla); }
+.dot.grey { background: var(--grey); }
+.diamond {
+  display: inline-block; width: 4.8mm; height: 4.8mm; margin: 0 0.8mm;
+  background: var(--vla); transform: rotate(45deg);
+}
+
+/* the three k-NN variants */
+.variants { margin-top: 5mm; border-top: 0.5mm solid var(--hairline); }
+.variants div {
+  display: grid; grid-template-columns: 1fr auto; column-gap: 4mm;
+  padding: 2.4mm 0; border-bottom: 0.5mm solid var(--hairline);
+  font-size: 8.2mm; line-height: 1.25; color: var(--ink-2);
+}
+.variants b { font-size: 9.6mm; color: var(--ink); }
+.variants em { font-size: 10.4mm; font-style: normal; font-weight: 800; color: var(--knn-text); text-align: right; }
+.variants span { grid-column: 1 / -1; }
+
+/* ablation: label, bar (its width is the success rate, set with --success), value */
+.ablation { display: grid; grid-template-columns: 150mm 1fr auto; align-items: center; gap: 2.6mm 4mm; margin-top: 4mm; }
+.ablation span { font-size: 8.4mm; line-height: 1.18; color: var(--ink-2); }
+.ablation > i {
+  display: block; height: 6.4mm; width: calc(var(--success) * 1%);
+  border-radius: 0 2mm 2mm 0; background: var(--knn-soft);
+}
+.ablation > i.baseline { background: var(--knn); }
+.ablation b { font-size: 9mm; font-weight: 700; text-align: right; white-space: nowrap; }
+
+/* t-SNE grid (markup from build.py): row label, then one map per column */
+.tsne-frame { width: 76%; margin: 0 auto; }
+.tsne { display: grid; grid-template-columns: 8mm repeat(5, minmax(0, 1fr)); align-items: start; gap: 0 2.5mm; }
+.tsne .column-title { font-size: 7.6mm; font-weight: 700; text-align: center; }
+.tsne .row-label { align-self: stretch; display: flex; align-items: center; justify-content: center; }
+.tsne .row-label span {
+  transform: rotate(-90deg);
+  font-size: 7mm; font-weight: 700; color: var(--ink-2); white-space: nowrap;
+}
+.tsne figure { text-align: center; }
+.tsne img { display: block; width: 100%; }
+.tsne figcaption { margin: -0.5mm 0 1mm; font-size: 6.8mm; line-height: 1.15; color: var(--muted); white-space: nowrap; }
+.tsne figcaption b { color: var(--knn-text); }
+.ramp {
+  display: flex; align-items: center; justify-content: center; gap: 3mm; margin-top: 1.5mm;
+  font-size: 6.8mm; color: var(--muted);
+}
+.ramp i {
+  width: 60mm; height: 2.4mm; border-radius: 2mm;
+  background: linear-gradient(90deg, #c9dcf4, #5a9be3, #1c5cab, #0b2a55);   /* PROGRESS_RAMP in build.py */
+}
+
+/* ---- bottom band: the take-away, the limitations and the QR codes ---- */
+.footer {
+  margin: 0 -28mm; padding: 8mm 28mm;
+  display: flex; align-items: center; gap: 20mm;
+  background: var(--ink); color: #fff;
+}
+.message { flex: 1; font: 700 16.5mm/1.12 var(--display); letter-spacing: -0.02em; }
+.message span { color: var(--knn); }
+.limits { width: 290mm; font-size: 7.4mm; line-height: 1.3; color: #a8b1bd; }
+.qr-codes { display: flex; gap: 7mm; }
+.qr { font-size: 6.2mm; font-weight: 600; color: #dfe5ec; text-align: center; }
+.qr div { margin-bottom: 1.2mm; padding: 2.6mm; border-radius: 3mm; background: #fff; }
+.qr img { display: block; width: 33mm; height: 33mm; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div>
+    <h1>How Much of Your VLA is <span>kNN</span></h1>
+    <div class="byline">
+      <b>Denis Grachev<sup>1</sup></b><b>Damien LaRocque<sup>1</sup></b><b>Omar Moured<sup>1,2</sup></b>
+      <small><span><sup>1</sup>Sereact GmbH</span><span><sup>2</sup>Karlsruher Institut für Technologie</span></small>
+      <div class="venue">CoRL 2026 Workshop on The Action Gap: Large Generative Models Learn Rich Knowledge</div>
+    </div>
+  </div>
+  <div class="aside">
+    <div class="logos">
+      <img class="logo-sereact" src="assets/logo_sereact.svg" alt="Sereact">
+      <img class="logo-kit" src="assets/logo_kit.svg" alt="Karlsruher Institut für Technologie">
+    </div>
+    <div class="stats">
+      <div><b>91.7<small> %</small></b>LIBERO success with retrieval alone, no training</div>
+      <div><b>−9.3<small> %pt</small></b>smallest drop under perturbation of any policy</div>
+      <div><b>7<small> of </small>8</b>backbones retrieve better after fine-tuning</div>
+      <div><b>4<small> of </small>9</b>VLAs lose to <i class="k">k</i>-NN on their own backbone</div>
+    </div>
+  </div>
+</header>
+
+<main class="columns">
+
+  <!-- column 1: motivation and method -->
+  <div class="column">
+    <section class="block">
+      <div class="eyebrow">Motivation</div>
+      <h2>What does a benchmark score tell us?</h2>
+      <p class="intro">VLAs now score above 95 % on LIBERO. But a success rate on its own says little: it depends on how closely the test conditions resemble the demonstrations.</p>
+      <p class="intro">We test how far <strong>retrieval alone</strong> gets, then use it to analyze nine public VLAs:</p>
+      <ul class="numbered">
+        <li>How much of LIBERO can retrieval solve?</li>
+        <li>What does fine-tuning change in the backbone and the action head?</li>
+        <li>Can we score a retrieval key without running rollouts?</li>
+      </ul>
+    </section>
+    <hr>
+    <section class="block">
+      <div class="eyebrow">Method</div>
+      <h2><i class="k">k</i>-NN as a training-free policy</h2>
+      <img class="figure" src="assets/pipeline.svg" alt="k-NN retrieval and a VLA policy, evaluated with the same rollout protocol">
+      <ul class="numbered">
+        <li><strong>Memory:</strong> frames from the 1,693 LIBERO demonstrations, each stored with the action chunk that follows it.</li>
+        <li><strong>Retrieve</strong> the <i class="k">k</i> nearest frames and execute a weighted average of their action chunks:
+          <img class="equation policy" src="build/eq_policy.svg" alt="The policy is the softmax-weighted sum of the neighbors' action chunks"></li>
+        <li><strong>Swap in a VLA's VLM backbone</strong> as the encoder to evaluate it separately from the action head.</li>
+      </ul>
+      <div class="variants">
+        <div><b><i class="k">k</i>-NN (ResNet)</b><em>88.7 %</em><span>Frozen ResNet-18 image features, searching only the instructed task.</span></div>
+        <div><b><i class="k">k</i>-NN (multimodal)</b><em>91.7 %</em><span>Adds robot state, language, time and history. Searches all demonstrations.</span></div>
+        <div><b><i class="k">k</i>-NN (LAC key)</b><em>93.0 %</em><span>Multimodal, plus a ResNet projection trained with LAC.</span></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- column 2: benchmark results and ablation -->
+  <div class="column">
+    <section class="block">
+      <div class="eyebrow">Result 1</div>
+      <h2>Retrieval reaches 91.7 % on LIBERO and drops the least under perturbation</h2>
+      <div class="legend">
+        <span><i class="dot"></i><span><i class="k">k</i>-NN (ours)</span></span>
+        <span><i class="dot vla"></i>9 public VLAs</span>
+      </div>
+      {{CHART_BENCHMARK}}
+      <p class="caption">Success rate (%). LIBERO: 2,000 episodes. LIBERO-Plus: the same 420 variants.</p>
+      <ul>
+        <li>With no learned policy, <i class="k">k</i>-NN <strong>matches π<sub>0</sub>-FAST</strong> on LIBERO.</li>
+        <li>On LIBERO-Plus, the multimodal <i class="k">k</i>-NN <strong>beats 7 of the 9 VLAs</strong>.</li>
+      </ul>
+    </section>
+    <hr>
+    <section class="block">
+      <div class="eyebrow">Ablation</div>
+      <h2>What does retrieval need?</h2>
+      <p>LIBERO success (%) after removing or replacing one component:</p>
+      <div class="ablation">
+        <span><strong><i class="k">k</i>-NN (multimodal)</strong></span><i class="baseline" style="--success: 91.7"></i><b>91.7</b>
+        <span>Without mode seeking, history, state or time (one at a time)</span><i style="--success: 91.1"></i><b>90.7–91.5</b>
+        <span>DINOv2-S features instead of ResNet-18</span><i style="--success: 83.4"></i><b>83.4</b>
+        <span>Only 10 % of the demonstrations</span><i style="--success: 77.4"></i><b>77.4</b>
+        <span>No language instruction</span><i style="--success: 64.6"></i><b>64.6</b>
+        <span>Raw pixels instead of image embeddings</span><i style="--success: 57.2"></i><b>57.2</b>
+      </div>
+      <p class="after-figure"><strong>The demonstrations, the image embeddings and the language prompt matter most.</strong></p>
+    </section>
+  </div>
+
+  <!-- column 3: the VLM backbone -->
+  <div class="column">
+    <section class="block">
+      <div class="eyebrow">Result 2</div>
+      <h2>Retrieval separates the VLM backbone from the action head</h2>
+      <p class="lead">We swap the ResNet features for each VLA's own VLM features, before and after LIBERO fine-tuning.</p>
+      <div class="legend">
+        <span><i class="dot ring"></i><span><i class="k">k</i>-NN before fine-tuning</span></span>
+        <span><i class="dot"></i><span><i class="k">k</i>-NN after</span></span>
+        <span><i class="diamond"></i>Full VLA</span>
+      </div>
+      {{CHART_BACKBONES}}
+      <p class="caption">Success rate (%). vs VLA: <i class="k">k</i>-NN after fine-tuning minus the full VLA, in %pt. *Frozen VLM.</p>
+      <ul>
+        <li><strong>When <i class="k">k</i>-NN beats the full VLA</strong> (by up to 48 %pt), the action head is leaving useful information in the backbone unused.</li>
+      </ul>
+    </section>
+    <hr>
+    <section class="block">
+      <div class="eyebrow">Result 3</div>
+      <h2>What LIBERO fine-tuning does to the backbone</h2>
+      <p class="lead">Why can <i class="k">k</i>-NN on a backbone outperform the full VLA? Fine-tuning reshapes the backbone:</p>
+      <div class="tsne-frame">{{TSNE}}</div>
+      <div class="ramp">Episode start<i></i>End</div>
+      <p class="caption">t-SNE of the retrieval keys for 4,150 demonstration frames, colored by episode progress. Below each map: LAC@8.</p>
+      <ul>
+        <li><strong>Better retrieval under perturbation</strong> for 7 of 8 fine-tuned VLAs.</li>
+        <li><strong>Less scene-dependent:</strong> nearest neighbors also become closer in task progress for most models.</li>
+        <li><strong>One exception, π<sub>0</sub>:</strong> representations collapse into task clusters, and <i class="k">k</i>-NN success drops from 86.9 % to 17.9 %.</li>
+      </ul>
+    </section>
+  </div>
+
+  <!-- column 4: action-space analysis and LAC -->
+  <div class="column">
+    <section class="block">
+      <div class="eyebrow">Result 4</div>
+      <h2>VLA actions stay close to the demonstrations</h2>
+      <p>We compare each VLA's action chunks from its LIBERO rollouts with the training demonstrations. Held-out demonstrations serve as the baseline.</p>
+      <ul>
+        <li><i class="k">k</i>-NN predicts the actions of <strong>5 of 8 VLAs</strong> better than it predicts held-out demonstrations.</li>
+        <li><strong>All 8 VLAs</strong> are closer to a training action chunk than held-out demonstrations are.</li>
+      </ul>
+    </section>
+    <hr>
+    <section class="block">
+      <div class="eyebrow">Metric</div>
+      <h2>Local Action Consistency (LAC)</h2>
+      <img class="figure" src="assets/lac.svg" alt="LAC compares the action distance to the k nearest frames with the distance to random frames of the task">
+      <p class="after-figure">An <strong>offline metric</strong>: do a frame's <i class="k">k</i> nearest neighbors <i>N<sub>k</sub></i>(<i>q</i>) also have similar future action chunks, compared with other frames <i>C</i>(<i>q</i>) from the same task?</p>
+      <img class="equation lac" src="build/eq_lac.svg" alt="LAC is one minus the ratio of the two mean squared action distances">
+    </section>
+    <hr>
+    <section class="block">
+      <div class="eyebrow">Result 5</div>
+      <h2>LAC tracks retrieval success</h2>
+      <div class="legend">
+        <span><i class="dot ring"></i>VLM before fine-tuning</span>
+        <span><i class="dot"></i>After</span>
+        <span><i class="dot grey"></i>Generic encoder</span>
+      </div>
+      {{CHART_LAC}}
+      <p class="caption">Each point is one visual encoder. Retrieval uses its image features only, within the instructed task.</p>
+      <ul>
+        <li><strong>Correlates with closed-loop <i class="k">k</i>-NN success</strong> (Pearson <i>r</i> = 0.78).</li>
+        <li><strong>Trains a better key:</strong> ResNet <i class="k">k</i>-NN rises from 88.7 to 93.0 %.</li>
+      </ul>
+    </section>
+  </div>
+</main>
+
+<footer class="footer">
+  <div class="message">Report a <span>retrieval baseline</span> alongside VLA results to distinguish memorization from generalization.</div>
+  <div class="limits">Limited to LIBERO and LIBERO-Plus, where dense demonstrations may favor retrieval. Retrieval cannot go beyond what is in its memory.</div>
+  <div class="qr-codes">
+    <div class="qr"><div><img src="build/qr_page.svg" alt="QR code: project page"></div>Paper &amp; videos</div>
+    <div class="qr"><div><img src="build/qr_code.svg" alt="QR code: source code"></div>Code</div>
+  </div>
+</footer>
+</body>
+</html>

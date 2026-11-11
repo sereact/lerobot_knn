@@ -16,6 +16,8 @@ import contextlib
 import logging
 import multiprocessing as mp
 import os
+import queue
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -32,6 +34,8 @@ SUITES = ("libero_spatial", "libero_object", "libero_goal", "libero_10")
 
 @dataclass(frozen=True)
 class Job:
+    """One episode to run: a task of a suite from one of its fixed initial states."""
+
     suite: str
     task_id: int
     init_state: int
@@ -93,9 +97,7 @@ def _available_ram_gb() -> float:
 
 def check_resources(n_workers: int, min_free_vram_gb: float = 4.0, min_free_ram_gb: float = 16.0) -> int:
     """Largest pool size (<= n_workers) that leaves the requested VRAM/RAM headroom on this machine."""
-    import psutil
-
-    ram_free = psutil.virtual_memory().available / 1e9
+    ram_free = _available_ram_gb()
     by_ram = int((ram_free - min_free_ram_gb) / WORKER_RAM_GB)
     by_vram = n_workers
     if torch.cuda.is_available():
@@ -117,6 +119,7 @@ def check_resources(n_workers: int, min_free_vram_gb: float = 4.0, min_free_ram_
 
 
 def _worker_main(conn: Connection, env_kwargs: dict[str, Any]) -> None:
+    """A simulator process: builds the env of the task it is asked for and serves ``reset`` / ``step`` commands."""
     import warnings
 
     # If memory ever runs out, make the kernel OOM killer take a simulator worker, not a user app.
@@ -189,6 +192,8 @@ def _stack_obs(obs_list: list[dict[str, Any]]) -> dict[str, Any]:
 
 @dataclass
 class _Running:
+    """The episode a worker is running."""
+
     job: Job
     task: str = ""
     max_steps: int = 0
@@ -218,6 +223,12 @@ class LiberoPool:
         }
         if libero_plus:  # needs the LIBERO-plus fork in place of `libero` (see outputs/libero_plus/setup.sh)
             self.env_kwargs["is_libero_plus"] = True
+        # a policy-specific LIBERO observation processor used instead of the env's default one
+        self.env_preprocessor_override = None
+        # (suite, task_id) -> the instruction given to the policy instead of the task's own
+        self.task_override: dict[tuple[str, int], str] = {}
+        # timing counters of the latest evaluate() call, for profiling
+        self.last_stats: dict[str, float] = {}
         n_workers = check_resources(n_workers)
         ctx = mp.get_context("spawn")
         self.conns: list[Connection] = []
@@ -271,11 +282,6 @@ class LiberoPool:
     def __exit__(self, *exc: object) -> None:
         self.close()
 
-    env_preprocessor_override = None  # a policy-specific LIBERO observation processor (e.g. X-VLA's)
-    task_override: dict[
-        tuple[str, int], str
-    ] = {}  # (suite, task_id) -> instruction given to the policy instead
-
     @torch.no_grad()
     def _policy_step(
         self, policy, preprocessor, postprocessor, obs: list[dict], tasks: list[str], wids: list[int]
@@ -309,9 +315,6 @@ class LiberoPool:
         the next batch), while workers whose policy still has queued actions (``needs_observation``)
         get them immediately without touching the GPU.
         """
-        import queue as queue_mod
-        import threading
-
         from tqdm import tqdm
 
         from lerobot.envs.libero import TASK_SUITE_MAX_STEPS
@@ -330,20 +333,13 @@ class LiberoPool:
         running: dict[int, _Running] = {}
         results: list[EpisodeResult] = []
         outstanding: set[int] = set()  # workers currently simulating (reset or step)
-        stats = {
-            "wait_s": 0.0,
-            "infer_s": 0.0,
-            "infer_calls": 0,
-            "infer_rows": 0,
-            "pops": 0,
-            "step_s": 0.0,
-            "steps": 0,
-        }
+        stats = {"wait_s": 0.0, "infer_s": 0.0, "step_s": 0.0}  # seconds
+        stats.update(infer_calls=0, infer_rows=0, pops=0, steps=0)  # counts
         self.last_stats = stats
         bar = tqdm(total=len(jobs), disable=not progress, desc="episodes", leave=False)
         can_pop = hasattr(policy, "needs_observation")
 
-        infer_queue: queue_mod.Queue = queue_mod.Queue()
+        infer_queue: queue.Queue = queue.Queue()
         res_recv, res_send = mp.Pipe(duplex=False)
 
         def infer_loop() -> None:
@@ -433,13 +429,13 @@ class LiberoPool:
                     if success or terminated or run.t >= run.max_steps:
                         results.append(
                             EpisodeResult(
-                                run.job.suite,
-                                run.job.task_id,
-                                run.job.init_state,
-                                run.task,
-                                bool(success),
-                                run.t,
-                                time.time() - run.start,
+                                suite=run.job.suite,
+                                task_id=run.job.task_id,
+                                init_state=run.job.init_state,
+                                task=run.task,
+                                success=bool(success),
+                                steps=run.t,
+                                wall_s=time.time() - run.start,
                             )
                         )
                         bar.update(1)
@@ -483,6 +479,7 @@ class LiberoPool:
 
 
 def summarize(results: list[EpisodeResult]) -> dict[str, Any]:
+    """Success rate overall, per suite (``<suite>``) and per task (``<suite>/<task_id>``), and the mean length."""
     out: dict[str, Any] = {"n_episodes": len(results)}
     if not results:
         return out
@@ -490,7 +487,7 @@ def summarize(results: list[EpisodeResult]) -> dict[str, Any]:
     suites = sorted({r.suite for r in results}, key=lambda s: SUITES.index(s) if s in SUITES else 99)
     for suite in suites:
         rs = [r for r in results if r.suite == suite]
-        out[f"{suite}"] = float(np.mean([r.success for r in rs]))
+        out[suite] = float(np.mean([r.success for r in rs]))
         for task_id in sorted({r.task_id for r in rs}):
             rt = [r for r in rs if r.task_id == task_id]
             out[f"{suite}/{task_id}"] = float(np.mean([r.success for r in rt]))

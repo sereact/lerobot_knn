@@ -8,6 +8,7 @@ generic encoders = grey, and a VLM's LIBERO training (before / after fine-tuning
 import json
 import os
 import re
+from collections.abc import Sequence
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
@@ -19,6 +20,9 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Rectangle
 
 HERE = Path(__file__).resolve().parents[1]
+STYLE = Path(__file__).with_name(
+    "figure.mplstyle"
+)  # the paper's two-panel figures (serif, LaTeX-like labels)
 DATA = json.loads((HERE / "data/poster_data.json").read_text())
 MAPS = json.loads((HERE / "data/embedding_maps.json").read_text())
 # KNN_FIG_TARGET=paper renders the same figures for the workshop paper (5.5 in text width, 9 pt) into paper/figures
@@ -67,6 +71,7 @@ def save(fig, name: str, **kwargs) -> None:
 
 
 def hbar_axes(ax) -> None:
+    """Style the axes of a horizontal bar chart: no y ticks or left spine, vertical grid lines."""
     ax.tick_params(axis="y", length=0, labelsize=FS_SMALL + 0.5, labelcolor=INK2)
     ax.spines["left"].set_visible(False)
     ax.xaxis.grid(True)
@@ -141,8 +146,13 @@ def fig_task_map() -> None:
     if the policies fail on the same tasks, the rows look alike."""
     panels = [(b, *task_matrix(b)) for b in ("libero", "libero_plus")]
     n = len(POLICIES)
-    fig, axes = plt.subplots(len(panels), 1, figsize=(W, 0.6 + 0.18 * n * len(panels) + 0.4 * len(panels)),
-                             layout="constrained", squeeze=False)  # fmt: skip
+    fig, axes = plt.subplots(
+        len(panels),
+        1,
+        figsize=(W, 0.6 + 0.18 * n * len(panels) + 0.4 * len(panels)),
+        layout="constrained",
+        squeeze=False,
+    )
     axes = axes[:, 0]
     cmap = mpl.colors.LinearSegmentedColormap.from_list("succ", ["#ffffff", "#c9dcf4", "#5a9be3", "#104281"])
     for ax, (bench, rows, m) in zip(axes, panels, strict=True):
@@ -156,8 +166,12 @@ def fig_task_map() -> None:
         for sp in ax.spines.values():
             sp.set_visible(False)
         ax.tick_params(length=0)
-        ax.set_title("LIBERO" if bench == "libero" else "LIBERO-plus (perturbed)", fontsize=FS_SMALL, color=INK2,
-                     loc="left")  # fmt: skip
+        ax.set_title(
+            "LIBERO" if bench == "libero" else "LIBERO-plus (perturbed)",
+            fontsize=FS_SMALL,
+            color=INK2,
+            loc="left",
+        )
     axes[-1].set_xlabel(
         "40 tasks, from easiest to hardest (mean over policies)", fontsize=FS_SMALL - 1.5, color=INK2
     )
@@ -195,14 +209,8 @@ def task_corr(bench: str) -> list[float]:
 PLUS_CATEGORIES = [("Camera Viewpoints", "Camera"), ("Robot Initial States", "Robot"), ("Language Instructions", "Language"),
                    ("Light Conditions", "Light"), ("Background Textures", "Background"), ("Sensor Noise", "Noise"),
                    ("Objects Layout", "Layout")]  # fmt: skip
-PLUS_RAMP = [
-    "#f5f6f8",
-    "#dcdee2",
-    "#b9bcc2",
-    "#8e9299",
-    "#5f636b",
-    "#353840",
-]  # neutral sequential, light -> dark
+# neutral sequential ramp, light -> dark
+PLUS_RAMP = ["#f5f6f8", "#dcdee2", "#b9bcc2", "#8e9299", "#5f636b", "#353840"]
 
 
 def fig_libero_plus() -> None:
@@ -229,8 +237,16 @@ def fig_libero_plus() -> None:
                     (x - 0.47, i - 0.45), 0.94, 0.9, facecolor=cmap(v / 100), edgecolor="white", linewidth=1.5
                 )
             )
-            ax.text(x, i, f"{v:.0f}", ha="center", va="center", fontsize=FS_SMALL,
-                    color="white" if v >= 60 else INK, weight="bold" if j == len(cols) - 1 else "normal")  # fmt: skip
+            ax.text(
+                x,
+                i,
+                f"{v:.0f}",
+                ha="center",
+                va="center",
+                fontsize=FS_SMALL,
+                color="white" if v >= 60 else INK,
+                weight="bold" if j == len(cols) - 1 else "normal",
+            )
     ax.set_xticks(xs, cols, rotation=35, ha="left", rotation_mode="anchor")
     ax.xaxis.tick_top()
     ax.set_yticks(range(len(rows)), [r[1] for r in rows])
@@ -261,114 +277,65 @@ def lookup_rows() -> list[tuple]:
     return out
 
 
-def fig_vla_lookup() -> None:
-    """Are VLAs secretly kNN? A lookup over the demos predicts their action chunks, and their chunks sit closer to the
-    training data than a new human demonstration does."""
-    rows = lookup_rows()
-    fig, (a, b) = plt.subplots(1, 2, figsize=(W, 0.85 + 0.27 * len(rows)), sharey=True, layout="constrained")
-    y = np.arange(len(rows))[::-1]
-    human = float(np.mean([r[2] for r in rows]))
-    for yi, (_lab, r2, _d, ratio) in zip(y, rows, strict=True):
-        a.barh(yi, r2, color=LEARNED, height=0.62, edgecolor="white")
-        a.text(r2 + 0.02, yi, f"{r2:.2f}", va="center", fontsize=FS_SMALL - 2.5, color=INK)
-        b.barh(yi, ratio, color=LEARNED, height=0.62, edgecolor="white")
-        b.text(ratio + 0.02, yi, f"{ratio:.2f}", va="center", fontsize=FS_SMALL - 2.5, color=INK)
-    a.axvline(human, color=KNN, linestyle=(0, (4, 3)), linewidth=1.6)
-    a.text(
-        human - 0.01,
-        len(rows) - 0.45,
-        "human demos",
+def lookup_bars(
+    ax, values: Sequence[float], reference: float, reference_label: str, xmax: float, xlabel: str
+) -> None:
+    """One horizontal bar per VLA (first row on top), with a dashed line at the reference value."""
+    for y, value in zip(np.arange(len(values))[::-1], values, strict=True):
+        ax.barh(y, value, color=LEARNED, height=0.62, edgecolor="white")
+        ax.text(value + 0.02, y, f"{value:.2f}", va="center", fontsize=FS_SMALL - 2.5, color=INK)
+    ax.axvline(reference, color=KNN, linestyle=(0, (4, 3)), linewidth=1.6)
+    ax.text(
+        reference - 0.01,
+        len(values) - 0.45,
+        reference_label,
         ha="right",
         va="bottom",
         fontsize=FS_SMALL - 2.5,
         color=KNN,
     )
-    b.axvline(1.0, color=KNN, linestyle=(0, (4, 3)), linewidth=1.6)
-    b.text(0.99, len(rows) - 0.45, "human demos", ha="right", va="bottom", fontsize=FS_SMALL - 2.5, color=KNN)
-    a.set_xlim(0, 1.12)
-    b.set_xlim(0, 1.35)
-    a.set_xlabel("R² of a lookup's prediction", fontsize=FS_SMALL - 1)
-    b.set_xlabel("distance to nearest training chunk (÷ human)", fontsize=FS_SMALL - 1)
-    for ax in (a, b):
-        hbar_axes(ax)
-        ax.tick_params(axis="x", labelsize=FS_SMALL - 2.5)
-    a.set_yticks(y, [r[0] for r in rows])
-    a.set_ylim(-0.6, len(rows) - 0.1)
-    save(fig, "vla_lookup")
+    ax.set_xlim(0, xmax)
+    ax.set_ylim(-0.6, len(values) - 0.1)
+    ax.set_xlabel(xlabel, fontsize=FS_SMALL - 1)
+    hbar_axes(ax)
+    ax.tick_params(axis="x", labelsize=FS_SMALL - 2.5)
 
 
-def double_fig_vla_lookup() -> None:
+def fig_vla_lookup() -> None:
     """Are VLAs secretly kNN? A lookup over the demos predicts their action chunks, and their chunks sit closer to the
     training data than a new human demonstration does."""
     rows = lookup_rows()
-    y = np.arange(len(rows))[::-1]
-    labels = [f"{r[0]}" for r in rows]
-    labels = [re.sub(r"π([\d.]+)", r"$\\pi_{\1}$", lab).replace("†", r"$^\dagger$") for lab in labels]
-
     human = float(np.mean([r[2] for r in rows]))
+    fig, (a, b) = plt.subplots(1, 2, figsize=(W, 0.85 + 0.27 * len(rows)), sharey=True, layout="constrained")
+    lookup_bars(a, [r[1] for r in rows], human, "human demos", 1.12, "R² of a lookup's prediction")
+    lookup_bars(
+        b, [r[3] for r in rows], 1.0, "human demos", 1.35, "distance to nearest training chunk (÷ human)"
+    )
+    a.set_yticks(np.arange(len(rows))[::-1], [r[0] for r in rows])
+    save(fig, "vla_lookup")
 
-    # Identical dimensions for both figures
-    FIGSIZE = (3.4, 0.85 + 0.27 * len(rows))
 
-    # --------------------------------------------------
-    # (a) Lookup prediction R²
-    # --------------------------------------------------
-    with plt.style.context("poster/scripts/figure.mplstyle"):
-        fig, ax = plt.subplots(figsize=FIGSIZE, layout="constrained")
-        for yi, (_lab, r2, _d, ratio) in zip(y, rows, strict=True):
-            ax.barh(yi, r2, color=LEARNED, height=0.62, edgecolor="white")
-            ax.text(r2 + 0.02, yi, f"{r2:.2f}", va="center", fontsize=FS_SMALL - 2.5, color=INK)
-
-        ax.axvline(human, color=KNN, linestyle=(0, (4, 3)), linewidth=1.6)
-        ax.text(
-            human - 0.01,
-            len(rows) - 0.45,
-            "Ground-truth actions",
-            ha="right",
-            va="bottom",
-            fontsize=FS_SMALL - 2.5,
-            color=KNN,
-        )
-        ax.set_xlim(0, 1.12)
-        ax.set_ylim(-0.6, len(rows) - 0.1)
-        ax.set_yticks(y, labels)
-        ax.set_xlabel(
-            "$R^2$ of a lookup's prediction",
-            fontsize=FS_SMALL - 1,
-        )
-        hbar_axes(ax)
-        ax.tick_params(axis="x", labelsize=FS_SMALL - 2.5)
-
-        save(fig, "vla_lookup_r2")
-
-    # --------------------------------------------------
-    # (b) Distance to nearest training chunk
-    # --------------------------------------------------
-    with plt.style.context("poster/scripts/figure.mplstyle"):
-        fig, ax = plt.subplots(figsize=FIGSIZE, layout="constrained")
-        for yi, (_lab, r2, _d, ratio) in zip(y, rows, strict=True):
-            ax.barh(yi, ratio, color=LEARNED, height=0.62, edgecolor="white")
-            ax.text(ratio + 0.02, yi, f"{ratio:.2f}", va="center", fontsize=FS_SMALL - 2.5, color=INK)
-
-        ax.axvline(1.0, color=KNN, linestyle=(0, (4, 3)), linewidth=1.6)
-        ax.text(
-            0.99,
-            len(rows) - 0.45,
-            "Ground-truth actions",
-            ha="right",
-            va="bottom",
-            fontsize=FS_SMALL - 2.5,
-            color=KNN,
-        )
-
-        ax.set_xlim(0, 1.35)
-        ax.set_ylim(-0.6, len(rows) - 0.1)
-        ax.set_yticks(y, labels)
-        ax.set_xlabel("Distance to nearest training chunk\nrelative to ground-truth", fontsize=FS_SMALL - 1)
-        hbar_axes(ax)
-        ax.tick_params(axis="x", labelsize=FS_SMALL - 2.5)
-
-        save(fig, "vla_lookup_distance")
+def fig_vla_lookup_panels() -> None:
+    """The two panels of ``fig_vla_lookup`` as separate figures of identical size, in the paper's style."""
+    rows = lookup_rows()
+    labels = [re.sub(r"π([\d.]+)", r"$\\pi_{\1}$", r[0]).replace("†", r"$^\dagger$") for r in rows]
+    human = float(np.mean([r[2] for r in rows]))
+    panels = (
+        ("vla_lookup_r2", [r[1] for r in rows], human, 1.12, "$R^2$ of a lookup's prediction"),
+        (
+            "vla_lookup_distance",
+            [r[3] for r in rows],
+            1.0,
+            1.35,
+            "Distance to nearest training chunk\nrelative to ground-truth",
+        ),
+    )
+    for name, values, reference, xmax, xlabel in panels:
+        with plt.style.context(STYLE):
+            fig, ax = plt.subplots(figsize=(3.4, 0.85 + 0.27 * len(rows)), layout="constrained")
+            lookup_bars(ax, values, reference, "Ground-truth actions", xmax, xlabel)
+            ax.set_yticks(np.arange(len(rows))[::-1], labels)
+            save(fig, name)
 
 
 def key_stem(name: str) -> str:
@@ -441,41 +408,79 @@ def fig_neighbors() -> None:
             if v["lac@8"] < 0.7:
                 off.append((name, v))
                 continue
-            ax.scatter([v["lac@8"]], [v["success"]], s=95, color=NEIGHBOR_COLOUR[role], edgecolor="white", linewidth=1.2,
-                       zorder=3)  # fmt: skip
+            ax.scatter(
+                [v["lac@8"]],
+                [v["success"]],
+                s=95,
+                color=NEIGHBOR_COLOUR[role],
+                edgecolor="white",
+                linewidth=1.2,
+                zorder=3,
+            )
     for i, (name, v) in enumerate(off):
         label = "π0 fine-tuned" if name.startswith("π0 LIBERO") else name
-        ax.annotate(f"← {label}: LAC {v['lac@8']:.2f}, {v['success']:.0f}% (off scale)", xy=(0.45, 0.06 + 0.1 * i),
-                    xycoords="axes fraction", fontsize=FS_SMALL - 1.5, color=INK2)  # fmt: skip
-    for name, label, offset in (("ResNet-18 grid", "ImageNet ResNet-18", (-8, 5)),
-                                ("ResNet-18 grid (learnt key)", "learnt key", (-8, 6)), ("DINOv2-S", "DINOv2", (8, -4))):  # fmt: skip
-        ax.annotate(label, (pts[name]["lac@8"], pts[name]["success"]), xytext=offset, textcoords="offset points",
-                    ha="right" if offset[0] < 0 else "left", fontsize=FS_SMALL - 1, color=INK2)  # fmt: skip
+        ax.annotate(
+            f"← {label}: LAC {v['lac@8']:.2f}, {v['success']:.0f}% (off scale)",
+            xy=(0.45, 0.06 + 0.1 * i),
+            xycoords="axes fraction",
+            fontsize=FS_SMALL - 1.5,
+            color=INK2,
+        )
+    for name, label, offset in (
+        ("ResNet-18 grid", "ImageNet ResNet-18", (-8, 5)),
+        ("ResNet-18 grid (learnt key)", "learnt key", (-8, 6)),
+        ("DINOv2-S", "DINOv2", (8, -4)),
+    ):
+        ax.annotate(
+            label,
+            (pts[name]["lac@8"], pts[name]["success"]),
+            xytext=offset,
+            textcoords="offset points",
+            ha="right" if offset[0] < 0 else "left",
+            fontsize=FS_SMALL - 1,
+            color=INK2,
+        )
     ax.set_xlabel("local action consistency LAC@8 (offline)")
     ax.set_ylabel("lookup on LIBERO (%)")
     ax.grid(True)
     ax.set_axisbelow(True)
-    handles = [Line2D([], [], marker="o", linestyle="", color=NEIGHBOR_COLOUR[r], markersize=9, label=lab)
-               for r, lab in (("generic", "ImageNet / DINOv2"), ("before", "VLM before fine-tuning"),
-                              ("after", "after"), ("learnt", "learnt key"))]  # fmt: skip
-    fig.legend(handles=handles, frameon=False, loc="outside upper center", ncol=4, fontsize=FS_SMALL - 1.5,
-               handletextpad=0.3, columnspacing=1.0)  # fmt: skip
+    handles = [
+        Line2D([], [], marker="o", linestyle="", color=NEIGHBOR_COLOUR[r], markersize=9, label=lab)
+        for r, lab in (
+            ("generic", "ImageNet / DINOv2"),
+            ("before", "VLM before fine-tuning"),
+            ("after", "after"),
+            ("learnt", "learnt key"),
+        )
+    ]
+    fig.legend(
+        handles=handles,
+        frameon=False,
+        loc="outside upper center",
+        ncol=4,
+        fontsize=FS_SMALL - 1.5,
+        handletextpad=0.3,
+        columnspacing=1.0,
+    )
     save(fig, "neighbors")
 
 
 # ---- embedding maps ------------------------------------------------------------------------------------------
-PROGRESS_RAMP = [
-    "#c9dcf4",
-    "#5a9be3",
-    "#1c5cab",
-    "#0b2a55",
-]  # episode start -> end (sequential, light -> dark)
+# episode start -> end (sequential, light -> dark)
+PROGRESS_RAMP = ["#c9dcf4", "#5a9be3", "#1c5cab", "#0b2a55"]
+# validated for every pair; the aqua is below 3:1 against white, hence the labelled legend
 SUITE_COLOURS = {
     "libero_spatial": "#2a78d6",
     "libero_object": "#eb6834",
     "libero_goal": "#1baf7a",
     "libero_10": "#4a3aa7",
-}  # fmt: skip  (validated all-pairs; aqua < 3:1, hence the labelled legend)
+}
+SUITE_NAMES = {
+    "libero_spatial": "Spatial",
+    "libero_object": "Object",
+    "libero_goal": "Goal",
+    "libero_10": "Long",
+}
 MAP_GRID = [  # (key space, panel title): generic keys and GR00T's frozen VLM, then each VLA before / after fine-tuning
     [("ResNet-18 grid", "ResNet-18"), ("ResNet-18 grid (learnt key)", "learnt key"), ("DINOv2-S", "DINOv2"),
      ("GR00T N1.7 frozen VLM grid2@L4", "GR00T (frozen)")],
@@ -530,6 +535,7 @@ def map_panel(ax, space: str, method: str, colour_by: str, stats: bool = True) -
 
 
 def map_legend(fig, colour_by: str) -> None:
+    """The colour scale of the maps: a progress colour bar, or one labelled dot per suite."""
     if colour_by == "progress":
         cmap = mpl.colors.LinearSegmentedColormap.from_list("progress", PROGRESS_RAMP)
         sm = mpl.cm.ScalarMappable(cmap=cmap, norm=mpl.colors.Normalize(0, 1))
@@ -538,14 +544,10 @@ def map_legend(fig, colour_by: str) -> None:
         cb.ax.tick_params(labelsize=FS_SMALL - 2.5, length=0)
         cb.outline.set_visible(False)
     else:
-        names = {
-            "libero_spatial": "Spatial",
-            "libero_object": "Object",
-            "libero_goal": "Goal",
-            "libero_10": "Long",
-        }
-        handles = [Line2D([], [], marker="o", linestyle="", color=c, markersize=6, label=names[s])
-                   for s, c in SUITE_COLOURS.items()]  # fmt: skip
+        handles = [
+            Line2D([], [], marker="o", linestyle="", color=c, markersize=6, label=SUITE_NAMES[s])
+            for s, c in SUITE_COLOURS.items()
+        ]
         fig.legend(handles=handles, frameon=False, loc="outside lower center", ncol=4, fontsize=FS_SMALL - 2)
 
 
@@ -610,8 +612,16 @@ def fig_optuna() -> None:
     trials = [t for t in op["trials"] if "k" in t["params"]]
     for one, colour, lab in ((True, KNN, "≤ 1 per demo"), (False, HUMAN, "any frames")):
         sel = [t for t in trials if bool(t["params"].get("one_per_episode", True)) == one]
-        b.scatter([t["params"]["k"] for t in sel], [100 * t["value"] for t in sel], s=34, color=colour,
-                  edgecolor="white", linewidth=0.8, label=lab, zorder=3)  # fmt: skip
+        b.scatter(
+            [t["params"]["k"] for t in sel],
+            [100 * t["value"] for t in sel],
+            s=34,
+            color=colour,
+            edgecolor="white",
+            linewidth=0.8,
+            label=lab,
+            zorder=3,
+        )
     b.set_xlabel("k", fontsize=FS_SMALL - 1)
     b.set_ylabel("trial success (%)", fontsize=FS_SMALL - 1)
     b.grid(True)
@@ -629,8 +639,12 @@ def _cell(v: float, fmt: str = "{:.0f}", bold: bool = False, colour: str | None 
 
 
 def _tex_label(label: str) -> str:
-    return (label.replace("π0.5", r"$\pi_{0.5}$").replace("π0-FAST", r"$\pi_0$-FAST").replace("π0", r"$\pi_0$")
-            .replace("kNN", r"\knnword{}"))  # fmt: skip
+    return (
+        label.replace("π0.5", r"$\pi_{0.5}$")
+        .replace("π0-FAST", r"$\pi_0$-FAST")
+        .replace("π0", r"$\pi_0$")
+        .replace("kNN", r"\knnword{}")
+    )
 
 
 def table_results() -> None:
@@ -648,8 +662,10 @@ def table_results() -> None:
              r"\cmidrule(lr){2-6}\cmidrule(lr){7-11}",
              r" & avg & Spat & Obj & Goal & Long & avg & Spat & Obj & Goal & Long & drop \\", r"\midrule"]  # fmt: skip
     for i, (lab, role, clean, plus) in enumerate(rows):
-        cells = [_cell(cols[j][i], "{:.1f}" if j in (0, 5) else "{:.0f}", bold=cols[j][i] >= best[j] - 1e-9)
-                 for j in range(10)]  # fmt: skip
+        cells = [
+            _cell(cols[j][i], "{:.1f}" if j in (0, 5) else "{:.0f}", bold=cols[j][i] >= best[j] - 1e-9)
+            for j in range(10)
+        ]
         drop = clean[0] - plus[0]
         cells.append(_cell(-drop, "{:+.1f}", bold=drop <= min_drop + 1e-9))
         prefix = r"\rowcolor{tint}" if role != "vla" else ""
@@ -703,8 +719,11 @@ def table_backbones() -> None:
         for col in (0, 1):
             b, a, v = before[col], after[col], vla[col]
             beats = a >= v
-            cells += [_cell(b, "{:.1f}"), _cell(a, "{:.1f}", bold=beats, colour="knn" if beats else None),
-                      _cell(v, "{:.1f}", colour="learned")]  # fmt: skip
+            cells += [
+                _cell(b, "{:.1f}"),
+                _cell(a, "{:.1f}", bold=beats, colour="knn" if beats else None),
+                _cell(v, "{:.1f}", colour="learned"),
+            ]
         lines.append(_tex_label(label) + " & " + " & ".join(cells) + r" \\")
     lines += [r"\bottomrule", r"\end{tabularx}"]
     (FIG / "backbones_table.tex").write_text("\n".join(lines) + "\n")
@@ -716,8 +735,8 @@ PLUS_VLAS = {"Pi": "vla:pi05_libero", "Xvla": "vla:xvla@lerobot/xvla-libero", "S
              "Jepa": "vla:vla_jepa@lerobot/VLA-JEPA-LIBERO"}  # fmt: skip
 
 
-def numbers() -> None:
-    """Every number the poster and the paper quote in their text, as LaTeX macros."""
+def policy_numbers() -> dict[str, str]:
+    """Success of the kNN and the VLAs on LIBERO and LIBERO-plus, drops under perturbation and ranks."""
     plus, control, abf = DATA["libero_plus"], DATA["libero_plus_control"], DATA["ablations_full"]
     knn_plus = plus["knn:outputs/knn/v2_39.json"]
     m = {
@@ -742,8 +761,12 @@ def numbers() -> None:
     # drop under perturbation, and the kNN's rank among the VLAs
     drops = {lab: libero_success(run)[0] - plus_success(spec)[0] for lab, _role, run, spec in POLICIES}
     vla_drops = sorted(drops[lab] for lab, role, *_ in POLICIES if role == "vla")
-    m.update(KnnDrop=f1(drops["kNN, full method"]), MinVlaDrop=f1(vla_drops[0]), MaxVlaDrop=f1(vla_drops[-1]),
-             VlaN=str(len(vla_drops)))  # fmt: skip
+    m.update(
+        KnnDrop=f1(drops["kNN, full method"]),
+        MinVlaDrop=f1(vla_drops[0]),
+        MaxVlaDrop=f1(vla_drops[-1]),
+        VlaN=str(len(vla_drops)),
+    )
     entrants = [p for p in POLICIES if p[1] == "vla" or p[0] == "kNN, full method"]
     for macro, score in (
         ("KnnRankLibero", lambda p: libero_success(p[2])[0]),
@@ -758,80 +781,153 @@ def numbers() -> None:
         top = max(v for v, _ in vals)
         best_plus += any(v >= top - 1e-9 and role != "vla" for v, role in vals)
     m["KnnBestPlusSuites"] = ["no", "one", "two", "three", "all four"][best_plus]
+    return m
 
-    # do the policies fail on the same episodes and tasks?
+
+def failure_numbers() -> dict[str, str]:
+    """Do the policies fail on the same episodes and tasks?"""
+    m: dict[str, str] = {}
     fo = failure_overlap("libero")
     lifts = [c / base for _lab, c, base in fo]
     tc = sorted(task_corr("libero"))
-    m.update(FailBase=f"{100 * fo[0][2]:.0f}", FailMin=f"{100 * min(c for _l, c, _b in fo):.0f}",
-             FailMax=f"{100 * max(c for _l, c, _b in fo):.0f}", LiftMin=f"{min(lifts):.1f}", LiftMax=f"{max(lifts):.1f}",
-             TaskCorrMedian=f"{tc[len(tc) // 2]:.2f}")  # fmt: skip
+    m.update(
+        FailBase=f"{100 * fo[0][2]:.0f}",
+        FailMin=f"{100 * min(c for _l, c, _b in fo):.0f}",
+        FailMax=f"{100 * max(c for _l, c, _b in fo):.0f}",
+        LiftMin=f"{min(lifts):.1f}",
+        LiftMax=f"{max(lifts):.1f}",
+        TaskCorrMedian=f"{tc[len(tc) // 2]:.2f}",
+    )
+    return m
 
-    # backbone and action head: the lookup on each VLA's VLM before / after fine-tuning vs the VLA
+
+def backbone_numbers() -> dict[str, str]:
+    """Backbone and action head: the lookup on each VLA's VLM before / after fine-tuning vs the VLA."""
+    m: dict[str, str] = {}
     rows = backbone_rows()
     tuned = [r for r in rows if r[1] != r[2]]  # GR00T froze its VLM: before = after
     up = [after[1] - before[1] for _l, before, after, _v in tuned if after[1] > before[1]]
     subtract = [after[1] - vla[1] for _l, _b, after, vla in rows if after[1] >= vla[1]]
-    m.update(KeyN=str(len(rows)), BeatenClean=str(sum(after[0] >= vla[0] for _l, _b, after, vla in rows)),
-             KeyNPlus=str(len(rows)), BeatenPlus=str(len(subtract)), FtN=str(len(tuned)), FtUp=str(len(up)),
-             FtUpMin=f"{min(up):.0f}", FtUpMax=f"{max(up):.0f}",
-             FtCleanUp=str(sum(after[0] > before[0] + 1 for _l, before, after, _v in tuned)),
-             SubtractMax=f"{max(subtract):.0f}")  # fmt: skip
+    m.update(
+        KeyN=str(len(rows)),
+        BeatenClean=str(sum(after[0] >= vla[0] for _l, _b, after, vla in rows)),
+        KeyNPlus=str(len(rows)),
+        BeatenPlus=str(len(subtract)),
+        FtN=str(len(tuned)),
+        FtUp=str(len(up)),
+        FtUpMin=f"{min(up):.0f}",
+        FtUpMax=f"{max(up):.0f}",
+        FtCleanUp=str(sum(after[0] > before[0] + 1 for _l, before, after, _v in tuned)),
+        SubtractMax=f"{max(subtract):.0f}",
+    )
+    return m
+
+
+def lookup_numbers() -> dict[str, str]:
+    """How well a lookup predicts the VLAs' action chunks."""
+    m: dict[str, str] = {}
     lookups = {lab: (r2, demo) for lab, r2, demo, _ratio in lookup_rows()}
     m["LookupPi"] = f"{lookups['π0.5'][0]:.2f}"
     m["LookupHuman"] = f"{np.mean([demo for _r2, demo in lookups.values()]):.2f}"
-    for tag in (
-        "Pi",
-        "Jepa",
-        "Smol",
-        "Fast",
-    ):  # the best lookup in the VLA's own key spaces on LIBERO-plus rollouts
+    # the best lookup in the VLA's own key spaces on LIBERO-plus rollouts
+    for tag in ("Pi", "Jepa", "Smol", "Fast"):
         r2 = DATA["head_vs_knn_plus"][PLUS_VLAS[tag][4:]]["r2_k8"]
         m[f"HeadPlus{tag}"] = f"{max(v for k, v in r2.items() if k != 'resnet18_l3'):.2f}"
+    return m
+
+
+def neighbor_numbers() -> dict[str, str]:
+    """Local action consistency of the keys and its correlation with closed-loop success."""
+    m: dict[str, str] = {}
     nm = DATA["neighbor_metric"]
     fair = nm["correlation"]["fair"]
-    shown = [
-        *NEIGHBOR_KEYS,
-        *(k["label"] for k in DATA["extra_keys"]),
-    ]  # one key per backbone, as in fig_neighbors
+    # one key per backbone, as in fig_neighbors
+    shown = [*NEIGHBOR_KEYS, *(k["label"] for k in DATA["extra_keys"])]
     others = [nm["spaces"][k]["lac@8"] for k in shown if k != "π0 LIBERO L12"]
     m.update(NmOtherMin=f"{min(others):.2f}", NmOtherMax=f"{max(others):.2f}")
-    m.update(NmFairRho=f"{fair['spearman_lac@8']:.2f}", NmFairR=f"{fair['pearson_lac@8']:.2f}", NmFairN=str(fair["n"]),
-             NmPiZeroLibero=f"{nm['spaces']['π0 LIBERO L12']['lac@8']:.2f}")  # fmt: skip
+    m.update(
+        NmFairRho=f"{fair['spearman_lac@8']:.2f}",
+        NmFairR=f"{fair['pearson_lac@8']:.2f}",
+        NmFairN=str(fair["n"]),
+        NmPiZeroLibero=f"{nm['spaces']['π0 LIBERO L12']['lac@8']:.2f}",
+    )
+    return m
 
-    # embedding maps: same-task neighbours on LIBERO-Goal (one scene, ten instructions) and the phase gap
+
+def map_numbers() -> dict[str, str]:
+    """Embedding maps: same-task neighbours on LIBERO-Goal (one scene, ten instructions), the phase gap and the
+    share of the map's variance the suite explains."""
+    m: dict[str, str] = {}
     spaces = MAPS["spaces"]
     goal = {name: 100 * v["task_nn/libero_goal"] for name, v in spaces.items()}
-    sees_prompt = [
-        n for n in goal if n.startswith(("π0", "X-VLA"))
-    ]  # bidirectional prefix attention over image + text
+    # bidirectional prefix attention over image + text
+    sees_prompt = [n for n in goal if n.startswith(("π0", "X-VLA"))]
     causal = [n for n in goal if spaces[n]["stage"] in ("before", "after") and n not in sees_prompt]
-    pairs = [(b, a) for b in spaces for a in spaces if spaces[b]["family"] == spaces[a]["family"]
-             and spaces[b]["stage"] == "before" and spaces[a]["stage"] == "after"]  # fmt: skip
+    pairs = [
+        (b, a)
+        for b in spaces
+        for a in spaces
+        if spaces[b]["family"] == spaces[a]["family"]
+        and spaces[b]["stage"] == "before"
+        and spaces[a]["stage"] == "after"
+    ]
     phase = {n: v["progress_gap"] for n, v in spaces.items()}
-    m.update(MapN=f"{len(MAPS['progress']):,}", MapGoalResnet=f"{goal['ResNet-18 grid']:.0f}",
-             MapGoalPromptMin=f"{min(goal[n] for n in sees_prompt):.0f}", MapGoalCausalMin=f"{min(goal[n] for n in causal):.0f}",
-             MapGoalCausalMax=f"{max(goal[n] for n in causal):.0f}", MapPhaseN=str(len(pairs)),
-             MapPhaseDown=str(sum(phase[a] < phase[b] for b, a in pairs)),
-             MapPhaseEvoBefore=f"{phase['Evo-1 base grid2@L10']:.3f}", MapPhaseEvoAfter=f"{phase['Evo-1 LIBERO grid2@L10']:.3f}",
-             MapPhasePiZeroBefore=f"{phase['π0 base L12']:.3f}", MapPhasePiZeroAfter=f"{phase['π0 LIBERO L12']:.3f}",
-             MapGoalPiZeroAfter=f"{goal['π0 LIBERO L12']:.0f}")  # fmt: skip
+    m.update(
+        MapN=f"{len(MAPS['progress']):,}",
+        MapGoalResnet=f"{goal['ResNet-18 grid']:.0f}",
+        MapGoalPromptMin=f"{min(goal[n] for n in sees_prompt):.0f}",
+        MapGoalCausalMin=f"{min(goal[n] for n in causal):.0f}",
+        MapGoalCausalMax=f"{max(goal[n] for n in causal):.0f}",
+        MapPhaseN=str(len(pairs)),
+        MapPhaseDown=str(sum(phase[a] < phase[b] for b, a in pairs)),
+        MapPhaseEvoBefore=f"{phase['Evo-1 base grid2@L10']:.3f}",
+        MapPhaseEvoAfter=f"{phase['Evo-1 LIBERO grid2@L10']:.3f}",
+        MapPhasePiZeroBefore=f"{phase['π0 base L12']:.3f}",
+        MapPhasePiZeroAfter=f"{phase['π0 LIBERO L12']:.3f}",
+        MapGoalPiZeroAfter=f"{goal['π0 LIBERO L12']:.0f}",
+    )
     r2 = {n: suite_r2(n) for n in spaces}
     before, after = [r2[b] for b, _a in pairs], [r2[a] for _b, a in pairs]
-    m.update(MapSuiteResnet=f"{100 * r2['ResNet-18 grid']:.0f}", MapSuiteBeforeMin=f"{100 * min(before):.0f}",
-             MapSuiteBeforeMax=f"{100 * max(before):.0f}", MapSuiteAfterMin=f"{100 * min(after):.0f}",
-             MapSuiteAfterMax=f"{100 * max(after):.0f}", MapSuiteDown=str(sum(r2[a] < r2[b] for b, a in pairs)))  # fmt: skip
+    m.update(
+        MapSuiteResnet=f"{100 * r2['ResNet-18 grid']:.0f}",
+        MapSuiteBeforeMin=f"{100 * min(before):.0f}",
+        MapSuiteBeforeMax=f"{100 * max(before):.0f}",
+        MapSuiteAfterMin=f"{100 * min(after):.0f}",
+        MapSuiteAfterMax=f"{100 * max(after):.0f}",
+        MapSuiteDown=str(sum(r2[a] < r2[b] for b, a in pairs)),
+    )
+    return m
 
-    # the kNN policy: hyper-parameter search and retry
+
+def search_numbers() -> dict[str, str]:
+    """The kNN policy: hyper-parameter search and retry."""
+    m: dict[str, str] = {}
     op = DATA["optuna"]
-    m.update(OptunaN=str(op["n_trials"]), OptunaAll=str(op["n_trials_all_studies"]),
-             OptunaK=f"{100 * op['importance']['k']:.0f}", OptunaOne=f"{100 * op['importance']['one_per_episode']:.0f}")  # fmt: skip
+    m.update(
+        OptunaN=str(op["n_trials"]),
+        OptunaAll=str(op["n_trials_all_studies"]),
+        OptunaK=f"{100 * op['importance']['k']:.0f}",
+        OptunaOne=f"{100 * op['importance']['one_per_episode']:.0f}",
+    )
     retry = DATA["retry"]
     others = [v for k, v in retry.items() if k != "base"]
     m.update(
         RetryBase=f1(100 * retry["base"]), RetryMin=f1(100 * min(others)), RetryMax=f1(100 * max(others))
     )
+    return m
 
+
+def numbers() -> None:
+    """Every number the poster and the paper quote in their text, as LaTeX macros."""
+    m = {
+        **policy_numbers(),
+        **failure_numbers(),
+        **backbone_numbers(),
+        **lookup_numbers(),
+        **neighbor_numbers(),
+        **map_numbers(),
+        **search_numbers(),
+    }
     lines = ["% generated by poster/scripts/make_figures.py -- do not edit"]
     lines += [f"\\newcommand{{\\{name}}}{{{value}}}" for name, value in m.items()]
     (FIG.parent if PAPER else HERE).joinpath("numbers.tex").write_text("\n".join(lines) + "\n")
@@ -841,7 +937,7 @@ if __name__ == "__main__":
     fig_task_map()
     fig_libero_plus()
     fig_vla_lookup()
-    double_fig_vla_lookup()
+    fig_vla_lookup_panels()
     fig_neighbors()
     fig_optuna()
     fig_embedding_pairs()

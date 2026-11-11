@@ -12,7 +12,6 @@ scripts can gate on it. Results are merged into ``outputs/vla/hub_sanity.json``.
 import argparse
 import json
 import sys
-from pathlib import Path
 
 import numpy as np
 import torch
@@ -21,10 +20,12 @@ from lerobot.utils.constants import OBS_STATE
 
 from ..features import load_frame_index
 from ..vla import DATASET_CAMERAS
+from .common import GRIPPER, MOTION, REPO_ID, VLA_OUT, action_chunks, read_jsonl
 from .vla_rollouts import build_runner
 
-OUT = Path("outputs/vla/hub_sanity.json")
+OUT = VLA_OUT / "hub_sanity.json"
 HORIZON = 8
+BATCH = 8
 
 
 def main() -> None:
@@ -35,44 +36,41 @@ def main() -> None:
     parser.add_argument("--suite", default=None, help="only frames of this suite's tasks")
     parser.add_argument("--frames", type=int, default=48)
     args = parser.parse_args()
-    f = load_frame_index("lerobot/libero")
-    suite_of = {}  # task prompt -> suite, from earlier closed-loop runs
-    for line in Path("outputs/vla/results_episodes.jsonl").read_text().splitlines():
-        e = json.loads(line)
-        suite_of[e["task"]] = e["suite"]
-    starts = np.nonzero(f.frame_index == 0)[0]
-    eligible = [
-        r
-        for r in starts
-        if args.suite is None or suite_of.get(f.task_names[int(f.task_index[r])]) == args.suite
+    frames = load_frame_index(REPO_ID)
+    # task prompt -> suite, from earlier closed-loop runs
+    suite_of = {e["task"]: e["suite"] for e in read_jsonl(VLA_OUT / "results_episodes.jsonl")}
+    eligible = [  # first frames of the demonstrations to draw from
+        row
+        for row in np.nonzero(frames.frame_index == 0)[0]
+        if args.suite is None or suite_of.get(frames.task_names[int(frames.task_index[row])]) == args.suite
     ]
     rng = np.random.default_rng(0)
-    picked = rng.choice(eligible, args.frames, replace=False)
-    rows = [int(rng.integers(r, max(r + 1, int(f.episode_end[r]) - 10))) for r in picked]
-    demo = np.stack([f.action[np.minimum(r + np.arange(HORIZON), f.episode_end[r])] for r in rows])
-    ds = LeRobotDataset("lerobot/libero")
-    items = [ds[r] for r in rows]
+    starts = rng.choice(eligible, args.frames, replace=False)
+    # one random frame of each drawn demonstration, at least 10 steps before its end
+    rows = np.array([int(rng.integers(r, max(r + 1, int(frames.episode_end[r]) - 10))) for r in starts])
+    demo = action_chunks(frames, rows, HORIZON)
+    dataset = LeRobotDataset(REPO_ID)
+    items = [dataset[int(r)] for r in rows]
     runner, _, _ = build_runner(args.name, 10)
     preds = []
-    for s in range(0, len(items), 8):
-        batch = items[s : s + 8]
-        sub = {cam: torch.stack([it[cam] for it in batch]) for cam in DATASET_CAMERAS}
-        sub[OBS_STATE] = torch.stack([it[OBS_STATE] for it in batch])
-        sub["task"] = [it["task"] for it in batch]
+    for s in range(0, len(items), BATCH):
+        batch = items[s : s + BATCH]
+        sub = {cam: torch.stack([item[cam] for item in batch]) for cam in DATASET_CAMERAS}
+        sub[OBS_STATE] = torch.stack([item[OBS_STATE] for item in batch])
+        sub["task"] = [item["task"] for item in batch]
         with torch.no_grad():
             chunk = runner._predict(sub)  # noqa: SLF001
         if runner.action_transform is not None:
-            b, c = chunk.shape[:2]
-            chunk = runner.action_transform(chunk.reshape(b * c, -1)).reshape(b, c, -1)
+            chunk = runner.action_transform(chunk.flatten(0, 1)).unflatten(0, chunk.shape[:2])
         preds.append(chunk[:, :HORIZON].float().numpy())
     pred = np.concatenate(preds)
-    mse = float(((pred[..., :6] - demo[..., :6]) ** 2).mean())
-    shuffled = float(((pred[..., :6] - np.roll(demo, 1, axis=0)[..., :6]) ** 2).mean())
-    grip = float((np.sign(pred[..., 6]) == np.sign(demo[..., 6])).mean())
+    mse = float(((pred[..., MOTION] - demo[..., MOTION]) ** 2).mean())
+    shuffled = float(((pred[..., MOTION] - np.roll(demo, 1, axis=0)[..., MOTION]) ** 2).mean())
+    gripper = float((np.sign(pred[..., GRIPPER]) == np.sign(demo[..., GRIPPER])).mean())
     entry = {
         "mse": round(mse, 4),
         "shuffled": round(shuffled, 4),
-        "gripper": round(grip, 3),
+        "gripper": round(gripper, 3),
         "ok": mse < 0.5 * shuffled,
     }
     if args.suite:

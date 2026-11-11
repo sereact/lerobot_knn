@@ -23,15 +23,18 @@ import numpy as np
 import torch
 
 from ..configuration_knn import KNNConfig
-from ..vla import Identity, cache_tag
-from .libero_pool import SUITES, Job, LiberoPool
+from ..features import load_frame_index
+from ..vla import Identity, cache_tag, resolve_spec
+from .common import PLUS_OUT, REPO_ID, append_jsonl
+from .head_vs_knn import base_task
+from .libero_pool import SUITES, EpisodeResult, Job, LiberoPool
 from .search import MemoryFactory, run_eval
-from .vla_rollouts import build_runner
+from .vla_rollouts import build_runner, save_records
 
-OUT = Path("outputs/libero_plus")
+Variant = dict  # one LIBERO-plus task variant: suite, task_id (in the suite), name, category, level
 
 
-def make_sample(per_cell: int, seed: int = 0) -> list[dict]:
+def make_sample(per_cell: int, seed: int = 0) -> list[Variant]:
     """``per_cell`` random variants of every (suite, perturbation category), with their task ids in the suite."""
     from libero.libero import benchmark
 
@@ -41,58 +44,68 @@ def make_sample(per_cell: int, seed: int = 0) -> list[dict]:
     rng = np.random.default_rng(seed)
     sample = []
     for suite in SUITES:
-        index = {name: i for i, name in enumerate(_get_suite(suite).get_task_names())}
-        by_cat = defaultdict(list)
+        task_id = {name: i for i, name in enumerate(_get_suite(suite).get_task_names())}
+        by_category = defaultdict(list)
         for entry in classes[suite]:
-            by_cat[entry["category"]].append(entry)
-        for cat in sorted(by_cat):
-            for entry in rng.choice(by_cat[cat], min(per_cell, len(by_cat[cat])), replace=False):
-                sample.append({"suite": suite, "task_id": index[entry["name"]], "name": entry["name"],
-                               "category": cat, "level": entry["difficulty_level"]})  # fmt: skip
+            by_category[entry["category"]].append(entry)
+        for category in sorted(by_category):
+            entries = by_category[category]
+            for entry in rng.choice(entries, min(per_cell, len(entries)), replace=False):
+                sample.append(
+                    {
+                        "suite": suite,
+                        "task_id": task_id[entry["name"]],
+                        "name": entry["name"],
+                        "category": category,
+                        "level": entry["difficulty_level"],
+                    }
+                )
     return sample
 
 
-def original_instructions(sample: list[dict]) -> dict[tuple[str, int], str]:
+def by_task(sample: list[Variant]) -> dict[tuple[str, int], Variant]:
+    return {(v["suite"], v["task_id"]): v for v in sample}
+
+
+def first_per_cell(sample: list[Variant], n: int) -> list[Variant]:
+    """The first ``n`` variants of every (suite, category)."""
+    seen: dict[tuple[str, str], int] = defaultdict(int)
+    out = []
+    for v in sample:
+        cell = (v["suite"], v["category"])
+        if seen[cell] < n:
+            seen[cell] += 1
+            out.append(v)
+    return out
+
+
+def original_instructions(sample: list[Variant]) -> dict[tuple[str, int], str]:
     """(suite, task_id) -> the instruction of the LIBERO task a LIBERO-plus variant was derived from."""
-    from ..features import load_frame_index
-    from .head_vs_knn import base_task
-
-    tasks = load_frame_index("lerobot/libero").task_names
-    return {(s["suite"], s["task_id"]): base_task(s["name"], tasks) for s in sample}
+    tasks = load_frame_index(REPO_ID).task_names
+    return {key: base_task(v["name"], tasks) for key, v in by_task(sample).items()}
 
 
-def save_records(recs: list[dict], sample: list[dict], path: Path) -> None:
+def save_plus_records(records: list[dict], sample: list[Variant], path: Path) -> None:
     """Recorded re-planning steps as ``vla_rollouts --record`` saves them, plus each variant's perturbation category
     and the instruction of its LIBERO base task (``base_task_names``, so reworded prompts map to the right memory)."""
-    meta = {(s["suite"], s["task_id"]): s for s in sample}
+    variant = by_task(sample)
     base = original_instructions(sample)
-    tasks = sorted({r["task"] for r in recs})
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(
+    keys = [(r["suite"], r["task_id"]) for r in records]
+    save_records(
+        records,
         path,
-        images=np.stack([r["images"] for r in recs]),
-        state=np.stack([r["state"] for r in recs]),
-        chunk=np.stack([r["chunk"] for r in recs]),
-        t=np.array([r["t"] for r in recs]),
-        task=np.array([tasks.index(r["task"]) for r in recs]),
-        task_names=np.array(tasks),
-        base_task_names=np.array([base[(r["suite"], r["task_id"])] for r in recs]),
-        category=np.array([meta[(r["suite"], r["task_id"])]["category"] for r in recs]),
-        suite=np.array([r["suite"] for r in recs]),
-        task_id=np.array([r["task_id"] for r in recs]),
-        init_state=np.array([r["init_state"] for r in recs]),
-        episode=np.array([r["episode"] for r in recs]),
-        success=np.array([r["success"] for r in recs]),
+        base_task_names=np.array([base[key] for key in keys]),
+        category=np.array([variant[key]["category"] for key in keys]),
     )
-    print(f"saved {len(recs)} chunks -> {path}", flush=True)
 
 
-def breakdown(sample: list[dict], results) -> dict:
-    meta = {(s["suite"], s["task_id"]): s for s in sample}
+def breakdown(sample: list[Variant], results: list[EpisodeResult]) -> dict[str, float]:
+    """Success rate overall (``all``) and per perturbation category, suite and difficulty level."""
+    variant = by_task(sample)
     groups: dict[str, list[bool]] = defaultdict(list)
     for r in results:
-        m = meta[(r.suite, r.task_id)]
-        for key in ("all", f"category/{m['category']}", f"suite/{r.suite}", f"level/{m['level']}"):
+        v = variant[(r.suite, r.task_id)]
+        for key in ("all", f"category/{v['category']}", f"suite/{r.suite}", f"level/{v['level']}"):
             groups[key].append(r.success)
     return {k: float(np.mean(v)) for k, v in sorted(groups.items())}
 
@@ -101,7 +114,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("policies", nargs="+", help="knn:<config.json> or vla:<name>")
     parser.add_argument("--per_cell", type=int, default=15)
-    parser.add_argument("--sample", default=str(OUT / "sample.json"))
+    parser.add_argument("--sample", default=str(PLUS_OUT / "sample.json"))
     parser.add_argument("--n_action_steps", type=int, default=10, help="VLA re-planning interval")
     parser.add_argument("--workers", type=int, default=10)
     parser.add_argument("--tag", default=None, help="default: libero_plus (libero_plus_original_instruction)")
@@ -138,47 +151,44 @@ def main() -> None:
         sample = make_sample(args.per_cell)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(sample, indent=1))
-    # one trial per variant, from its first initial state (the LIBERO-plus protocol)
-    seeds = {(s["suite"], s["task_id"]): i for i, s in enumerate(sample)}  # the main run's seeds
+    # every variant keeps the seed it has in the full sample, whatever subset runs
+    seeds = {(v["suite"], v["task_id"]): i for i, v in enumerate(sample)}
     if args.categories:
         keep = set(args.categories.split(","))
-        sample = [s for s in sample if s["category"] in keep]
+        sample = [v for v in sample if v["category"] in keep]
     if args.suites:
         keep = set(args.suites.split(","))
-        sample = [s for s in sample if s["suite"] in keep]
+        sample = [v for v in sample if v["suite"] in keep]
     if args.record_per_cell:
-        seen: dict[tuple[str, str], int] = defaultdict(int)
-        sub = []
-        for s in sample:
-            if seen[(s["suite"], s["category"])] < args.record_per_cell:
-                seen[(s["suite"], s["category"])] += 1
-                sub.append(s)
-        sample = sub
-    default_tag = "libero_plus_record" if args.record_per_cell else "libero_plus"
-    args.tag = args.tag or ("libero_plus_original_instruction" if args.original_instruction else default_tag)
-    jobs = [Job(s["suite"], s["task_id"], 0, seed=seeds[(s["suite"], s["task_id"])]) for s in sample]
-    factory = None
-    # the render size the (first) VLA's evaluation uses, e.g. 448 px for Evo-1
-    from ..vla import resolve_spec
+        sample = first_per_cell(sample, args.record_per_cell)
+    if args.tag is None:
+        if args.original_instruction:
+            args.tag = "libero_plus_original_instruction"
+        else:
+            args.tag = "libero_plus_record" if args.record_per_cell else "libero_plus"
+    # one trial per variant, from its first initial state (the LIBERO-plus protocol)
+    jobs = [Job(v["suite"], v["task_id"], 0, seed=seeds[(v["suite"], v["task_id"])]) for v in sample]
+    variant = by_task(sample)
 
+    # the render size the VLAs' evaluation uses, e.g. 448 px for Evo-1
     sizes = {resolve_spec(p.split(":", 1)[1]).observation_size for p in args.policies if p.startswith("vla:")}
     if args.observation_size:  # LIBERO-plus's fog noise assumes 256 px renders
         sizes = {args.observation_size}
     if len(sizes) > 1:
         raise ValueError(f"policies with different render sizes {sizes}: evaluate them separately")
-    with LiberoPool(
-        n_workers=args.workers, libero_plus=True, observation_size=sizes.pop() if sizes else 256
-    ) as pool:
+    observation_size = sizes.pop() if sizes else 256
+
+    factory = None
+    with LiberoPool(n_workers=args.workers, libero_plus=True, observation_size=observation_size) as pool:
         if args.original_instruction:
             pool.task_override = original_instructions(sample)
-        for spec in args.policies:
-            kind, name = spec.split(":", 1)
+        for policy_id in args.policies:
+            kind, name = policy_id.split(":", 1)
             t0 = time.time()
             if kind == "knn":
                 factory = factory or MemoryFactory()
-                overrides = {
-                    k: v for k, v in json.loads(Path(name).read_text()).items() if not k.startswith("_")
-                }
+                config = json.loads(Path(name).read_text())
+                overrides = {k: v for k, v in config.items() if not k.startswith("_")}
                 _, results = run_eval(
                     factory, pool, KNNConfig(device="cuda", **overrides), jobs, progress=True
                 )
@@ -193,24 +203,38 @@ def main() -> None:
                 pool.set_control_mode("relative")
                 failed = runner.failed_predictions
                 if runner.records:
-                    save_records(runner.records, sample, OUT / "rollouts" / f"{cache_tag(name)}.npz")
+                    save_plus_records(
+                        runner.records, sample, PLUS_OUT / "rollouts" / f"{cache_tag(name)}.npz"
+                    )
                 del runner
             stats = breakdown(sample, results)
-            row = {"tag": args.tag, "policy": spec, "n_episodes": len(results), "failed_predictions": failed,
-                   "time": time.strftime("%Y-%m-%d %H:%M:%S"), "eval_s": time.time() - t0, **stats}  # fmt: skip
-            OUT.mkdir(parents=True, exist_ok=True)
-            with (OUT / "results.jsonl").open("a") as f:
-                f.write(json.dumps(row) + "\n")
-            meta = {(s["suite"], s["task_id"]): s for s in sample}
-            with (OUT / "results_episodes.jsonl").open("a") as f:
-                for r in results:
-                    m = meta[(r.suite, r.task_id)]
-                    f.write(json.dumps({"tag": args.tag, "policy": spec, "category": m["category"],
-                                        "level": m["level"], **r.__dict__}) + "\n")  # fmt: skip
-            cats = " ".join(
+            row = {
+                "tag": args.tag,
+                "policy": policy_id,
+                "n_episodes": len(results),
+                "failed_predictions": failed,
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "eval_s": time.time() - t0,
+                **stats,
+            }
+            append_jsonl(PLUS_OUT / "results.jsonl", [row])
+            append_jsonl(
+                PLUS_OUT / "results_episodes.jsonl",
+                (
+                    {
+                        "tag": args.tag,
+                        "policy": policy_id,
+                        "category": variant[(r.suite, r.task_id)]["category"],
+                        "level": variant[(r.suite, r.task_id)]["level"],
+                        **vars(r),
+                    }
+                    for r in results
+                ),
+            )
+            categories = " ".join(
                 f"{k.split('/')[1].split()[0]}={v:.2f}" for k, v in stats.items() if k.startswith("category/")
             )
-            print(f"{spec}: {stats['all']:.4f} ({cats}) {row['eval_s']:.0f}s", flush=True)
+            print(f"{policy_id}: {stats['all']:.4f} ({categories}) {row['eval_s']:.0f}s", flush=True)
             torch.cuda.empty_cache()
 
 

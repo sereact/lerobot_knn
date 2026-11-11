@@ -25,18 +25,17 @@ import optuna
 import torch
 
 from ..configuration_knn import KNNConfig
+from ..encoders import TextEncoder
 from ..features import DEFAULT_CACHE_DIR, load_frame_index
 from ..memory import build_memory, cache_loader
 from ..modeling_knn import KNNPolicy
 from ..processor_knn import make_knn_pre_post_processors
-from .libero_pool import SUITES, LiberoPool, make_jobs, summarize
+from .common import KNN_OUT, REPO_ID, append_jsonl, parse_range, suite_scores
+from .libero_pool import SUITES, EpisodeResult, Job, LiberoPool, make_jobs, summarize
 
 logger = logging.getLogger(__name__)
 
-REPO_ID = "lerobot/libero"
-OUT = Path("outputs/knn")
-
-CAMERAS = ("observation.images.image", "observation.images.image2")
+AGENT_VIEW, WRIST = "observation.images.image", "observation.images.image2"
 
 
 class MemoryFactory:
@@ -58,11 +57,6 @@ class MemoryFactory:
             self._raw[key] = self._load(*key)
         return self._raw[key]
 
-    def forget_raw(self, keep: set[tuple] | None = None) -> None:
-        for key in list(self._raw):
-            if keep is None or key not in keep:
-                del self._raw[key]
-
     def demo_subset(self, fraction: float, seed: int = 0) -> np.ndarray:
         """Episode ids keeping ``fraction`` of every task's demonstrations (at least one each)."""
         rng = np.random.default_rng(seed)
@@ -74,9 +68,8 @@ class MemoryFactory:
         return np.sort(np.concatenate(keep))
 
     def build(self, config: KNNConfig, episodes: np.ndarray | None = None) -> KNNPolicy:
+        """A policy whose memory holds ``episodes`` (default: every demonstration)."""
         if self._text is None:
-            from ..encoders import TextEncoder
-
             self._text = TextEncoder(config.text_encoder).to(self.device)(self.frames.task_names).cpu()
         buffers, _ = build_memory(
             config,
@@ -96,21 +89,22 @@ class MemoryFactory:
         if config.active_cameras:
             if key not in self._encoders:
                 self._encoders[key] = policy.image_encoder()
-            policy._frozen["image"] = (self._encoders[key], policy.device)
+            policy._frozen["image"] = (self._encoders[key], policy.device)  # noqa: SLF001
         return policy
 
-
-def base_config(**overrides: Any) -> KNNConfig:
-    cfg = KNNConfig(device="cuda", **overrides)
-    return cfg
+    def release_encoders(self) -> None:
+        """Drop the shared image backbones (a VLM used as a key takes most of the GPU) and free their memory."""
+        self._encoders.clear()
+        torch.cuda.empty_cache()
 
 
 def sample_config(trial: optuna.Trial, space: str) -> KNNConfig:
     """Hyper-parameter search space (``space`` versions the space so studies stay reproducible)."""
-    if space == "v2":
-        return sample_config_v2(trial)
-    if space == "v3":
-        return sample_config_v3(trial)
+    return SEARCH_SPACES.get(space, sample_config_v1)(trial)
+
+
+def sample_config_v1(trial: optuna.Trial) -> KNNConfig:
+    """v1: which encoder and pooling, camera / state / time weights, k, temperature, stickiness, chunking."""
     encoders = {
         "dinov2_small": ("cls", "mean", "grid2"),
         "dinov3_small": ("cls", "mean", "grid2"),
@@ -138,10 +132,11 @@ def sample_config(trial: optuna.Trial, space: str) -> KNNConfig:
     ens_coeff = trial.suggest_float("ensemble_coeff", 0.0, 0.5) if ens else None
     n_act = 1 if ens else trial.suggest_int("n_action_steps", 1, chunk, log=True)
     stride = trial.suggest_categorical("memory_stride", [1, 2, 4])
-    return base_config(
+    return KNNConfig(
+        device="cuda",
         image_encoder=enc,
         image_pooling=pooling,
-        camera_weights={CAMERAS[0]: w_agent, CAMERAS[1]: w_wrist},
+        camera_weights={AGENT_VIEW: w_agent, WRIST: w_wrist},
         state_weight=state_w,
         time_weight=time_weight,
         k=k,
@@ -192,10 +187,11 @@ def sample_config_v2(trial: optuna.Trial) -> KNNConfig:
     ens_coeff = trial.suggest_float("ensemble_coeff", -0.3, 0.6) if ens else None
     n_act = 1 if ens else trial.suggest_int("n_action_steps", 1, chunk, log=True)
     stride = trial.suggest_categorical("memory_stride", [1, 2])
-    return base_config(
+    return KNNConfig(
+        device="cuda",
         image_encoder=enc,
         image_pooling=pooling,
-        camera_weights={CAMERAS[0]: w_agent, CAMERAS[1]: w_wrist},
+        camera_weights={AGENT_VIEW: w_agent, WRIST: w_wrist},
         state_weight=state_w,
         distance_normalization=normalization,
         task_conditioning=conditioning,
@@ -234,12 +230,13 @@ def sample_config_v3(trial: optuna.Trial) -> KNNConfig:
     pooling = trial.suggest_categorical(f"pooling_{enc}", list(encoders[enc]))
     conditioning = trial.suggest_categorical("task_conditioning", ["filter", "soft"])
     chunk = trial.suggest_categorical("chunk_size", [8, 16])
-    return base_config(
+    return KNNConfig(
+        device="cuda",
         image_encoder=enc,
         image_pooling=pooling,
         camera_weights={
-            CAMERAS[0]: trial.suggest_float("w_agentview", 0.1, 1.0),
-            CAMERAS[1]: trial.suggest_float("w_wrist", 0.1, 1.0),
+            AGENT_VIEW: trial.suggest_float("w_agentview", 0.1, 1.0),
+            WRIST: trial.suggest_float("w_wrist", 0.1, 1.0),
         },
         state_weight=trial.suggest_float("state_weight", 5e-3, 1.0, log=True),
         gripper_weight=optional("gripper_weight", 0.02, 1.0),
@@ -265,47 +262,52 @@ def sample_config_v3(trial: optuna.Trial) -> KNNConfig:
     )
 
 
+SEARCH_SPACES = {"v1": sample_config_v1, "v2": sample_config_v2, "v3": sample_config_v3}
+
+# the KNNConfig fields a search may set: what a trial stores as its configuration
+SEARCHED_FIELDS = (
+    "image_encoder",
+    "image_pooling",
+    "camera_weights",
+    "state_weight",
+    "gripper_weight",
+    "query_tta",
+    "distance_normalization",
+    "task_conditioning",
+    "text_weight",
+    "time_weight",
+    "k",
+    "temperature",
+    "one_per_episode",
+    "consistency_weight",
+    "consistency_window",
+    "history_weight",
+    "history_gap",
+    "norm_preserving",
+    "action_mode_bandwidth",
+    "ensemble_mode_bandwidth",
+    "gripper_mode",
+    "chunk_size",
+    "n_action_steps",
+    "temporal_ensemble_coeff",
+    "memory_stride",
+)
+
+
 def config_dict(cfg: KNNConfig) -> dict[str, Any]:
-    keys = [
-        "image_encoder",
-        "image_pooling",
-        "camera_weights",
-        "state_weight",
-        "gripper_weight",
-        "query_tta",
-        "distance_normalization",
-        "task_conditioning",
-        "text_weight",
-        "time_weight",
-        "k",
-        "temperature",
-        "one_per_episode",
-        "consistency_weight",
-        "consistency_window",
-        "history_weight",
-        "history_gap",
-        "norm_preserving",
-        "action_mode_bandwidth",
-        "ensemble_mode_bandwidth",
-        "gripper_mode",
-        "chunk_size",
-        "n_action_steps",
-        "temporal_ensemble_coeff",
-        "memory_stride",
-        "task_conditioning",
-    ]
-    return {k: getattr(cfg, k) for k in keys}
+    return {k: getattr(cfg, k) for k in SEARCHED_FIELDS}
 
 
 def run_eval(
     factory: MemoryFactory,
     pool: LiberoPool,
     cfg: KNNConfig,
-    jobs,
+    jobs: list[Job],
     early_stop=None,
     progress: bool = False,
     episodes: np.ndarray | None = None,
-) -> tuple[dict[str, Any], list]:
+) -> tuple[dict[str, Any], list[EpisodeResult]]:
+    """Build the policy of ``cfg`` (memory = ``episodes``) and run ``jobs``: (summary, per-episode results)."""
     policy = factory.build(cfg, episodes=episodes)
     pre, post = make_knn_pre_post_processors(cfg)
     t0 = time.time()
@@ -332,21 +334,19 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("lerobot_policy_knn.modeling_knn").setLevel(logging.WARNING)
 
-    lo, hi = (int(x) for x in args.init_states.split(":"))
-    states = list(range(lo, hi))
-    stage_states = [states[i :: args.stages] for i in range(args.stages)]
-    stage_jobs = [make_jobs(args.suites.split(","), init_states=st) for st in stage_states]
-    OUT.mkdir(parents=True, exist_ok=True)
-    storage = f"sqlite:///{OUT / 'optuna.db'}"
+    # the initial states are split into stages: a trial below the median after a stage is pruned
+    states = list(parse_range(args.init_states))
+    stage_jobs = [
+        make_jobs(args.suites.split(","), init_states=states[i :: args.stages]) for i in range(args.stages)
+    ]
+    KNN_OUT.mkdir(parents=True, exist_ok=True)
     sampler_cls = optuna.samplers.TPESampler  # spellchecker:disable-line
-    sampler = sampler_cls(seed=args.seed, multivariate=True, group=True, n_startup_trials=20)
-    pruner = optuna.pruners.MedianPruner(n_startup_trials=15, n_warmup_steps=0)
     study = optuna.create_study(
         study_name=args.study,
-        storage=storage,
+        storage=f"sqlite:///{KNN_OUT / 'optuna.db'}",
         direction="maximize",
-        sampler=sampler,
-        pruner=pruner,
+        sampler=sampler_cls(seed=args.seed, multivariate=True, group=True, n_startup_trials=20),
+        pruner=optuna.pruners.MedianPruner(n_startup_trials=15, n_warmup_steps=0),
         load_if_exists=True,
     )
     study.set_user_attr("suites", args.suites)
@@ -358,13 +358,13 @@ def main() -> None:
             study.enqueue_trial(params, skip_if_exists=True)
 
     factory = MemoryFactory()
-    log_path = OUT / f"trials_{args.study}.jsonl"
-    episodes_path = OUT / f"episodes_{args.study}.jsonl"
+    log_path = KNN_OUT / f"trials_{args.study}.jsonl"
+    episodes_path = KNN_OUT / f"episodes_{args.study}.jsonl"
     with LiberoPool(n_workers=args.workers) as pool:
 
         def objective(trial: optuna.Trial) -> float:
             cfg = sample_config(trial, args.space)
-            results: list = []
+            results: list[EpisodeResult] = []
             t0 = time.time()
             summary: dict[str, Any] = {}
             for stage, jobs in enumerate(stage_jobs):
@@ -385,23 +385,18 @@ def main() -> None:
             for key, value in summary.items():
                 trial.set_user_attr(key, value)
             trial.set_user_attr("config", json.dumps(config_dict(cfg)))
-            with log_path.open("a") as f:
-                f.write(json.dumps({"trial": trial.number, "params": trial.params, **summary}) + "\n")
-            with episodes_path.open("a") as f:
-                for r in results:
-                    f.write(json.dumps({"trial": trial.number, **r.__dict__}) + "\n")
+            append_jsonl(log_path, [{"trial": trial.number, "params": trial.params, **summary}])
+            append_jsonl(episodes_path, ({"trial": trial.number, **vars(r)} for r in results))
             logger.info(
                 "trial %d: success %.3f (%s) in %.0fs",
                 trial.number,
                 summary["success"],
-                " ".join(
-                    f"{s.split('_')[1]}={summary.get(s, float('nan')):.2f}" for s in SUITES if s in summary
-                ),
+                suite_scores(summary, SUITES),
                 summary["eval_s"],
             )
             return summary["success"]
 
-        stop_file = OUT / f"STOP_{args.study}"
+        stop_file = KNN_OUT / f"STOP_{args.study}"
 
         def stop_if_requested(study: optuna.Study, _trial: optuna.trial.FrozenTrial) -> None:
             # `touch outputs/knn/STOP_<study>` ends the search cleanly after the current trial

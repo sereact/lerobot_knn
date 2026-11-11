@@ -1,5 +1,6 @@
-# Rebuild the poster from the experiment logs: `make` (or `make figures` / `make pdf`).
-all: pdf
+# Rebuild the figures, tables and numbers from the experiment logs: `make` (or `make data` / `make figures`).
+# The poster itself is built in corl2026/.
+all: figures
 
 data:
 	uv run python scripts/prepare_data.py
@@ -7,10 +8,4 @@ data:
 figures: data
 	uv run python scripts/make_figures.py
 
-pdf: figures
-	latexmk -lualatex -interaction=nonstopmode -halt-on-error poster.tex
-
-clean:
-	latexmk -C poster.tex
-
-.PHONY: all data figures pdf clean
+.PHONY: all data figures
