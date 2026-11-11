@@ -1,0 +1,28 @@
+# Style of every figure of the paper: the text of the paper (paper/corl_2026.sty), drawn at print size (5.5 in wide).
+
+# Times, as \rmdefault{ptm}: Nimbus Roman is the Times of LaTeX; STIXGeneral (shipped with matplotlib) as fallback
+font.family: serif
+font.serif: Nimbus Roman, STIXGeneral, Times New Roman, Times
+mathtext.fontset: stix
+
+# \normalsize = 10 pt for text, \small = 9 pt for ticks and legends
+font.size: 10
+axes.titlesize: 10
+axes.labelsize: 10
+xtick.labelsize: 9
+ytick.labelsize: 9
+legend.fontsize: 9
+
+# colours: utils.Colour.GRID, without the "#" that starts a comment here; text and axes stay black, as in the paper
+grid.color: e1e0d9
+
+axes.spines.top: False
+axes.spines.right: False
+axes.linewidth: 0.8
+xtick.major.width: 0.8
+ytick.major.width: 0.8
+xtick.major.size: 3
+ytick.major.size: 3
+grid.linewidth: 0.7
+lines.linewidth: 2
+
