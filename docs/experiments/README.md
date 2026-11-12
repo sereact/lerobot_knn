@@ -80,6 +80,5 @@ The full results table (12 policies × LIBERO and LIBERO-plus) and the backbone 
 | VLA results (local) | `outputs/vla/results.jsonl`, `results_episodes.jsonl`, `neighbor_metric*.json`, `hub_sanity.json`, `head_vs_knn_*.json` |
 | LIBERO-plus (local) | `outputs/libero_plus/` (venv, fork, `sample.json`, `results*.jsonl`) |
 | Everything the poster and paper show | `poster/data/poster_data.json` (tracked), built by `poster/scripts/prepare_data.py` |
-| Poster, paper | `poster/corl2026/`, `paper/` (`make` rebuilds data, figures, `numbers.tex` and the PDF) |
 
 Result files under `outputs/` are not in git; only the configurations are.

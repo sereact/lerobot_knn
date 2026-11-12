@@ -30,7 +30,7 @@ MUJOCO_GL=egl lerobot-eval --policy.path=outputs/knn/policies/my_knn --env.type=
     --eval.n_episodes=50 --eval.batch_size=10
 ```
 
-To use a VLA backbone for retrieval keys, pass `--policy.image_encoder=vla:<name>` (for example `vla:pi05_libero`) together with `--policy.image_pooling=grid2@L12 --policy.key_norm=zscore`.
+To use a VLA backbondocs/e for retrieval keys, pass `--policy.image_encoder=vla:<name>` (for example `vla:pi05_libero`) together with `--policy.image_pooling=grid2@L12 --policy.key_norm=zscore`.
 
 Most of the code is in [`src/lerobot_policy_knn`](src/lerobot_policy_knn/):
 
@@ -160,7 +160,6 @@ This project is licensed under an [Apache 2.0](LICENSE) license.
 │   ├── vla             # keys on VLA backbones, held-out split
 │   └── libero_plus     # LIBERO-plus environment and the 420 sampled variants
 ├── poster              # figure scripts, their data and the workshop poster (corl2026)
-├── paper               # LaTeX source of the paper
 ├── docs                # policy options, experiment notes, literature review
 └── tests
 ``` -->

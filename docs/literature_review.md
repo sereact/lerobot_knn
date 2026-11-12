@@ -2,7 +2,7 @@
 
 What other work says about retrieval policies, memorisation in VLAs, what fine-tuning does to the VLM backbone, VLA
 interpretability, and offline evaluation, and where our probe sits. Collected 2026-10-03; every entry was checked
-against its arXiv or venue page. Entries cited in `paper/refs.bib` are marked **[cited]**.
+against its arXiv or venue page.
 
 ## Our position in one paragraph
 

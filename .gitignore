@@ -7,18 +7,6 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 
-# Paper build intermediates (`make -C paper` regenerates them) and the downloaded CoRL template (its .sty and .bst are
-# copied into paper/)
-paper/*.aux
-paper/*.bbl
-paper/*.blg
-paper/*.fls
-paper/*.fdb_latexmk
-paper/*.log
-paper/*.out
-paper/template/
-paper/corl_template.zip
-
 # Packaging
 build/
 dist/
