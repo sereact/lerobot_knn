@@ -1,31 +1,22 @@
 # How Much of Your VLA is kNN
 
-[![Project page](https://img.shields.io/badge/Project-page-blue)](https://sereact.github.io/lerobot_knn/)
-[![Paper](https://img.shields.io/badge/Paper-PDF-red)](https://sereact.github.io/lerobot_knn/static/pdfs/how_much_of_your_vla_is_knn.pdf)
-[![License](https://img.shields.io/badge/License-Apache_2.0-green)](LICENSE)
+[![arXiv](https://img.shields.io/badge/arXiv-2611.13160-b31b1b.svg)](https://arxiv.org/abs/2611.13160)
+[![CoRL 2026 Workshop](https://img.shields.io/badge/CoRL%202026-G2A%2FTAG%20workshop-blue.svg)](https://actiongapworkshop.github.io)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-green.svg)](LICENSE)
 
 ![A k-NN policy retrieves the nearest demonstration frames and executes their action chunks](assets/pipeline.png "The k-NN retrieval policy")
 
 > **How Much of Your VLA is kNN**\
 > Denis Grachev, Damien LaRocque, Omar Moured\
-> Project page: https://sereact.github.io/lerobot_knn/
+> Paper: https://arxiv.org/abs/2611.13160
 
-This repo contains the source code of our paper _How Much of Your VLA is kNN_, presented at the CoRL 2026 Workshop on
-The Action Gap: Large Generative Models Learn Rich Knowledge.
-
-We retrieve the nearest demonstration frames and replay their action chunks, without training anything. We do not
-propose k-NN for robot control. We use it as a probe that answers three questions about a benchmark and a
-vision-language-action model (VLA):
-
-1. **How hard is the task?** Whatever a lookup over generic image features solves is retrieval, not generalization.
-2. **How good is a VLA's backbone?** Key the same lookup on the VLA's own vision-language model, before and after
-   fine-tuning.
-3. **How good is its action head?** Compare the VLA with a lookup on its own backbone.
+This repo contains the source code of our paper _How Much of Your VLA is kNN_, presented at the [CoRL 2026 Workshop on G2A: From Generative Models to Robot Actions](https://actiongapworkshop.github.io).
+Rollouts and interactive results are available on the [project page](https://sereact.github.io/lerobot_knn).
 
 ## Source Code
 
-The policy is an out-of-tree [LeRobot](https://github.com/huggingface/lerobot) plugin (`--policy.type=knn`), so it is
-fitted from any LeRobot dataset with one command and evaluated with the standard `lerobot-eval`:
+The k-NN policy is an out-of-tree [LeRobot](https://github.com/huggingface/lerobot) [policy plugin](https://huggingface.co/docs/lerobot/bring_your_own_policies), available as `--policy.type=knn`.
+The `lerobot-knn-fit` command builds its memory from any LeRobot dataset, and the standard `lerobot-eval` command can be used to evaluate the resulting policy:
 
 ```sh
 # Embed lerobot/libero with a frozen encoder and save the memory as a policy
@@ -39,121 +30,123 @@ MUJOCO_GL=egl lerobot-eval --policy.path=outputs/knn/policies/my_knn --env.type=
     --eval.n_episodes=50 --eval.batch_size=10
 ```
 
-To key the lookup on a VLA's backbone, pass `--policy.image_encoder=vla:<name>` (for example `vla:pi05_libero`) with
-`--policy.image_pooling=grid2@L12 --policy.key_norm=zscore`.
+To use a VLA backbone for retrieval keys, pass `--policy.image_encoder=vla:<name>` (for example `vla:pi05_libero`) together with `--policy.image_pooling=grid2@L12 --policy.key_norm=zscore`.
 
 Most of the code is in [`src/lerobot_policy_knn`](src/lerobot_policy_knn/):
 
 * [`modeling_knn.py`](src/lerobot_policy_knn/modeling_knn.py) and
   [`configuration_knn.py`](src/lerobot_policy_knn/configuration_knn.py) contain the policy and its options
-* [`memory.py`](src/lerobot_policy_knn/memory.py), [`features.py`](src/lerobot_policy_knn/features.py) and
+* [`memory.py`](src/lerobot_policy_knn/memory.py),
+  [`features.py`](src/lerobot_policy_knn/features.py) and
   [`encoders.py`](src/lerobot_policy_knn/encoders.py) build the memory of demonstration embeddings
 * [`vla.py`](src/lerobot_policy_knn/vla.py) turns the backbones of nine VLA families into retrieval keys
 * [`experiments/`](src/lerobot_policy_knn/experiments/) contains the evaluation and analysis scripts of the paper
 
-The options of the policy and the list of VLA keys are described in [`docs/policy.md`](docs/policy.md).
+The options of the policy are described in [`docs/policy.md`](docs/policy.md).
 
 ### Installation
 
-We use [uv](https://docs.astral.sh/uv/) and Python 3.12. The VLAs and the simulator need an NVIDIA GPU.
+We use [uv](https://docs.astral.sh/uv) and Python 3.12.
+The VLAs and the simulator require an NVIDIA GPU.
 
 ```sh
 uv sync --extra all           # everything: LIBERO, Optuna and every VLA family
-uv sync --extra experiments   # only the k-NN policy, LIBERO evaluation and the hyper-parameter search
+uv sync --extra experiments   # k-NN policy, LIBERO evaluation and hyperparameter search
 ```
 
-LeRobot is an unmodified dependency, pinned in `pyproject.toml` to the commit the study ran on. Run all commands
-from the root of the repo, since the experiments read and write under `outputs/`.
+LeRobot is an unmodified dependency, pinned in `pyproject.toml` to the commit used in the paper.
 
-[LIBERO-plus](https://github.com/sylvestf/LIBERO-plus) replaces the `libero` package, so it needs its own
-environment. [`outputs/libero_plus/setup.sh`](outputs/libero_plus/setup.sh) builds it. Run its commands with
-`PYTHONPATH=outputs/libero_plus/LIBERO-plus LIBERO_CONFIG_PATH=outputs/libero_plus/libero_config MUJOCO_GL=egl`.
+## Benchmarks
 
-## Results
+* **LIBERO**: the memory contains the 1,693 training demonstrations of [`lerobot/libero`](https://huggingface.co/datasets/lerobot/libero), storing every second frame for approximately 137,000 entries.
+We evaluate the Spatial, Object, Goal, and Long suites with initial states 0-49 for all 40 tasks, totaling 2,000 episodes per policy.
+* **LIBERO-plus**: evaluation uses a fixed sample of 420 perturbed variants, with 60 per perturbation category across seven categories, shared across all policies and held out from training and hyperparameter tuning.
+  [LIBERO-plus](https://github.com/sylvestf/LIBERO-plus) replaces the `libero` package and therefore requires a separate environment, set up with [`outputs/libero_plus/setup.sh`](outputs/libero_plus/setup.sh).
 
-### LIBERO and LIBERO-plus
+## Model hyperparameters and checkpoints
 
-LIBERO: official protocol, initial states 0–49 of all 40 tasks (2,000 episodes); the two full-method kNN rows with
-`lerobot-eval`, every other row in our evaluation pool (`experiments/libero_pool.py`) on the same initial states.
-LIBERO-plus: a fixed sample of 420 of its perturbed variants (60 per perturbation), the same for every policy, never
-trained on. Rows are ordered by LIBERO-plus. The VLAs are public LeRobot Hub LIBERO checkpoints, evaluated as
-released; none was trained here.
+### k-NN
 
-| Policy | LIBERO | Spatial | Object | Goal | Long | LIBERO-plus | drop |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| π0.5 | **97.7** | 97.0 | 99.8 | 97.8 | 96.2 | **85.5** | −12.2 |
-| MolmoAct2 | 97.5 | 97.4 | 99.4 | 97.6 | 95.6 | 82.6 | −14.9 |
-| **kNN, full method** (`outputs/knn/v2_39.json`) | 91.7 | 88.0 | 99.8 | 97.6 | 81.4 | 82.4 | **−9.3** |
-| kNN, full method + learnt key | 93.0 | 90.6 | 99.6 | 97.0 | 84.8 | 81.7 | −11.3 |
-| GR00T N1.7 | 94.8 | 95.8 | 98.2 | 94.6 | 90.8 | 80.2 | −14.6 |
-| kNN, plain (ImageNet ResNet-18) | 88.7 | 90.4 | 95.0 | 95.2 | 74.2 | 75.5 | −13.2 |
-| VLA-JEPA | 97.2 | 95.4 | 100.0 | 97.4 | 95.8 | 74.0 | −23.1 |
-| Evo-1 | 95.4 | 92.0 | 98.6 | 97.4 | 93.6 | 71.4 | −24.0 |
-| X-VLA | 94.5 | 94.6 | 98.6 | 92.6 | 92.2 | 64.5 | −30.0 |
-| π0 | 71.9 | 70.0 | 86.4 | 85.8 | 45.2 | 42.9 | −29.0 |
-| SmolVLA | 82.2 | 78.8 | 92.2 | 88.0 | 69.6 | 27.9 | −54.3 |
-| π0-FAST | 90.5 | 90.4 | 93.8 | 90.6 | 87.4 | 25.7 | −64.8 |
+The multimodal k-NN variant uses the following hyperparameters, selected with Optuna on initial states 40–49.
+The configuration file is available in [`outputs/knn/v2_39.json`](outputs/knn/v2_39.json).
 
-The configuration of the full method is [`outputs/knn/v2_39.json`](outputs/knn/v2_39.json).
+|        Parameter         | Value                                   |
+| :----------------------: | --------------------------------------- |
+|      Image encoder       | ResNet-18, layer 3 (ImageNet)           |
+|      Image pooling       | 4×4 grid                                |
+| Camera weights (agent, wrist) | 0.53, 0.57                   |
+|       State weight       | 0.034                                   |
+|  Distance normalization  | pair median                             |
+|    Task conditioning     | soft, text weight 0.48                  |
+|       Time weight        | 0.016                                   |
+|           `k`            | 13, one neighbour per episode           |
+|       Temperature        | 0.093                                   |
+|      History weight      | 1.0                                     |
+|  Action mode bandwidth   | 0.35                                    |
+|       Chunk size         | 8, re-planned every step                |
+| Temporal ensemble coeff. | 0.42                                    |
+|      Memory stride       | 2                                       |
 
-### Backbone and action head
+### VLA checkpoints
 
-A plain lookup keyed on each VLA's own VLM (one layer, z-scored, 2×2 grid per camera; the layer is chosen once per
-family offline and kept for both checkpoints), before and after its LIBERO fine-tuning, next to the VLA itself:
+We evaluate the authors' public LIBERO checkpoints as released in LeRobot, without training anything.
+Retrieval keys before LIBERO fine-tuning use the corresponding base checkpoint.
+Each checkpoint has a name in `VLA_SPECS` in [`vla.py`](src/lerobot_policy_knn/vla.py), used as `vla:<name>`.
 
-| VLA | LIBERO: key before | key after | VLA | LIBERO-plus: key before | key after | VLA |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| π0.5 | 85.4 | 81.8 | 97.7 | 60.5 | 65.7 | 85.5 |
-| MolmoAct2 | 78.6 | 91.3 | 97.5 | 52.6 | 81.0 | 82.6 |
-| GR00T N1.7 (frozen VLM) | 87.5 | 87.5 | 94.8 | 66.4 | 66.4 | 80.2 |
-| VLA-JEPA | 84.0 | 83.0 | 97.2 | 49.3 | 65.7 | 74.0 |
-| Evo-1 | 62.1 | 87.1 | 95.4 | 35.5 | **72.6** | 71.4 |
-| X-VLA | 83.3 | 88.5 | 94.5 | 62.4 | **78.1** | 64.5 |
-| π0 | 86.9 | 17.9 | 71.9 | 56.7 | 2.4 | 42.9 |
-| SmolVLA | 76.3 | **86.5** | 82.2 | 45.0 | **69.3** | 27.9 |
-| π0-FAST | 86.6 | **95.0** | 90.5 | 58.3 | **74.0** | 25.7 |
+|    VLA     | Before LIBERO fine-tuning                     | After LIBERO fine-tuning                          |
+| :--------: | --------------------------------------------- | ------------------------------------------------- |
+| $\pi _{0.5}$    | `lerobot/pi05_base`                           | `lerobot/pi05_libero_finetuned_v044`              |
+| $\pi _{0}$     | `lerobot/pi0_base`                            | `lerobot/pi0_libero_finetuned_v044`               |
+| $\pi _{0}$-FAST  | `lerobot/pi0fast-base`                        | `lerobot/pi0fast-libero`                          |
+|  SmolVLA   | `lerobot/smolvla_base`                        | `lerobot/smolvla_libero`                          |
+|   X-VLA    | `lerobot/xvla-base`                           | `lerobot/xvla-libero`                             |
+|  VLA-JEPA  | `lerobot/VLA-JEPA-Pretrain`                   | `lerobot/VLA-JEPA-LIBERO`                         |
+| GR00T N1.7 | `nvidia/GR00T-N1.7-3B`                        | `nvidia/gr00t17-lerobot-<suite>-640`, one per suite |
+| MolmoAct2  | `allenai/MolmoAct2`                           | `allenai/MolmoAct2-LIBERO-LeRobot`                |
+|   Evo-1    | `OpenGVLab/InternVL3-1B-hf` (first 14 layers) | `zuoxingdong/evo1_libero`                         |
 
-Bold: the lookup on the fine-tuned VLM beats the VLA.
-
-The remaining results, the ablations and the notes on each experiment are in
-[`docs/experiments/`](docs/experiments/README.md).
+The `lerobot/pi05_base` and `lerobot/pi0_base` checkpoints are converted to bfloat16 with
+[`experiments/convert_bf16.py`](src/lerobot_policy_knn/experiments/convert_bf16.py).
 
 ## Reproducing the experiments
 
-Every closed-loop run except the official `lerobot-eval` ones goes through `experiments/libero_pool.py`, a persistent
-pool of simulator processes that reproduces `lerobot-eval`'s LIBERO semantics (same env, initial states, processors
-and step limits) but schedules the episodes of all tasks asynchronously; episode `i` of a task uses initial state `i`.
-Run each module as `uv run python -m lerobot_policy_knn.experiments.<module> --help` for its options.
-
-| Step | Module | Writes |
-| --- | --- | --- |
-| hyper-parameter search on initial states 40–49 (`knn_v1`, `knn_v2`, `knn_v3_<suite>`) | `search --study=knn_v2 --space=v2` | `outputs/knn/optuna.db`; browse with `uv run optuna-dashboard sqlite:///outputs/knn/optuna.db` |
-| re-score the best trials on held-out initial states 0–19 | `finalize` | `outputs/knn/final_candidates.json` |
-| kNN configurations on the same episodes (`--init_states=0:50 --tag=full50` for the official protocol) | `compare <config.json> ...` | `outputs/knn/compare.jsonl`, `compare_episodes.jsonl` |
-| one-change ablation configurations | `ablations` | `outputs/knn/ablations/*.json` |
-| VLA closed loop (`--record` saves its chunks) | `vla_rollouts <name>` | `outputs/vla/results.jsonl`, `results_episodes.jsonl`, `rollouts/` |
-| offline check of a VLA checkpoint on demo frames | `vla_sanity <name>` | `outputs/vla/hub_sanity.json` |
-| VLM features of every memory frame | `vla_features <name>` | the feature cache |
-| layer pilot and key choice per family | `embed_pilot`, `choose_keys` | `outputs/vla/embed_pilot.json`, `configs/plain_*.json`, `extra_keys.json` |
-| does a lookup predict the VLA's chunks? | `head_vs_knn` | `outputs/vla/head_vs_knn_*.json` |
-| LAC and its correlation with closed loop | `neighbor_metric --heldout`, `neighbor_metric --correlate` | `outputs/vla/neighbor_metric_heldout.json` |
-| a key trained for LAC | `learn_key` | `outputs/vla/learned_key_resnet.pt` |
-| PCA and t-SNE maps of every key, neighbour statistics (CPU) | `embedding_maps` | `outputs/vla/embedding_maps.json` |
-| LIBERO-plus closed loop (separate venv) | `libero_plus_eval knn:<config.json> vla:<name> ...` | `outputs/libero_plus/results.jsonl`, `results_episodes.jsonl` |
-| LIBERO-plus demos as queries; reworded instructions | `plus_neighbor_metric`, `plus_language` | `outputs/libero_plus/neighbor_metric_plus.json`, `language_sensitivity.json` |
-
-The result files stay local (`outputs/` is ignored except configurations); `poster/data/poster_data.json` collects every
-number the poster and paper use, `poster/data/embedding_maps.json` the 2-D maps.
-
-The figures, the poster and the paper are built with `make`:
+Each experiment is a module in [`experiments/`](src/lerobot_policy_knn/experiments/).
+To view its options, run:
 
 ```sh
-make -C poster            # figures and tables from the experiment logs
-make -C poster/corl2026   # the workshop poster
-make -C paper             # the paper
+uv run python -m lerobot_policy_knn.experiments.<module> --help
 ```
 
-## Repository structure
+The steps, expected outputs and notes for each experiment are documented in [`docs/experiments/`](docs/experiments/README.md).
+
+## Acknowledgments
+
+This work builds on [LeRobot](https://github.com/huggingface/lerobot), whose policies, datasets and evaluation we use
+unmodified, as well as the [LIBERO](https://github.com/Lifelong-Robot-Learning/LIBERO) and
+[LIBERO-plus](https://github.com/sylvestf/LIBERO-plus) benchmarks.
+
+## Citation
+
+If you use the code in an academic context, please cite the following work:
+
+```bibtex
+@inproceedings{grachev2026knn,
+  title         = {{How Much of Your VLA is kNN}},
+  author        = {Grachev, Denis and LaRocque, Damien and Moured, Omar},
+  booktitle     = {CoRL 2026 Workshop on G2A: From Generative Models to Robot Actions},
+  year          = {2026},
+  eprint        = {2611.13160},
+  archivePrefix = {arXiv},
+  url           = {https://arxiv.org/abs/2611.13160}
+}
+```
+
+## License
+
+This project is licensed under an [Apache 2.0](LICENSE) license.
+
+
+<!-- ## Repository structure
 
 ```sh
 .
@@ -170,29 +163,4 @@ make -C paper             # the paper
 ├── paper               # LaTeX source of the paper
 ├── docs                # policy options, experiment notes, literature review
 └── tests
-```
-
-## Acknowledgments
-
-This work builds on [LeRobot](https://github.com/huggingface/lerobot), whose policies, datasets and evaluation we use
-unmodified, on the [LIBERO](https://github.com/Lifelong-Robot-Learning/LIBERO) benchmark and on
-[LIBERO-plus](https://github.com/sylvestf/LIBERO-plus). The VLAs are the public LIBERO checkpoints of their authors on
-the LeRobot Hub, evaluated as released.
-
-## Citation
-
-If you use the code in an academic context, please cite the following work:
-
-```bibtex
-@inproceedings{grachev2026knn,
-  title     = {How Much of Your {VLA} is {kNN}},
-  author    = {Grachev, Denis and LaRocque, Damien and Moured, Omar},
-  booktitle = {CoRL 2026 Workshop on The Action Gap: Large Generative Models Learn Rich Knowledge},
-  year      = {2026},
-  url       = {https://sereact.github.io/lerobot_knn/}
-}
-```
-
-## License
-
-This project is licensed under an [Apache 2.0](LICENSE) license.
+``` -->
